@@ -1,8 +1,26 @@
-# Controle RPV
+# SISCON Controle RPV
 
-Aplicacao web Flask para controle operacional de RPVs normais, dativos, pendencias documentais, conciliacao de importacoes e conferencia REINF.
+Aplicacao web Flask desenvolvida para apoiar um fluxo real de controle financeiro/operacional de RPVs normais, dativos, pendencias documentais, conciliacao de importacoes e conferencia REINF.
 
-Esta versao foi preparada para portfolio publico. Ela nao inclui bancos de dados, planilhas, backups, certificados, arquivos `.env` reais ou documentos internos de operacao.
+O projeto nasceu para substituir controles dispersos em planilhas e verificacoes manuais por um sistema local com rastreabilidade, validacao de regras, historico de alteracoes e separacao segura entre codigo e dados sensiveis.
+
+Esta versao foi preparada para portfolio publico. Ela demonstra arquitetura, regras de negocio e testes automatizados, mas nao inclui bancos de dados, planilhas, backups, certificados, arquivos `.env` reais ou documentos internos de operacao.
+
+## Contexto
+
+Setores financeiros que lidam com pagamentos judiciais precisam conferir processos, beneficiarios, documentos, valores, imposto retido, status de empenho, ordens bancarias e informacoes de REINF. Quando esse fluxo depende apenas de planilhas, aumenta o risco de duplicidade, retrabalho, perda de historico e alteracoes sem rastreio.
+
+O sistema organiza esse processo em uma aplicacao web local, com foco em seguranca operacional e produtividade da equipe.
+
+## Impactos Do Projeto
+
+- Centralizacao do acompanhamento de RPVs normais e dativos em uma interface unica.
+- Reducao de risco operacional por meio de validacao de documentos, valores, duplicidades e status.
+- Rastreabilidade de alteracoes criticas com historico por usuario, data, hora e campos modificados.
+- Maior seguranca para dados sensiveis, mantendo banco, planilhas, backups e segredos fora do Git.
+- Apoio a tomada de decisao com dashboard, filtros e visoes de conferencia.
+- Padronizacao de importacoes com relatorios de pendencias antes da entrada definitiva no fluxo.
+- Evolucao controlada do banco com migrations e testes automatizados.
 
 ## Destaques
 
@@ -15,6 +33,19 @@ Esta versao foi preparada para portfolio publico. Ela nao inclui bancos de dados
 - Separacao entre codigo, configuracao local e dados sensiveis.
 - Suite automatizada com `pytest` cobrindo regras de negocio e fluxos criticos.
 
+## Habilidades Demonstradas
+
+- Desenvolvimento web backend com Flask, Blueprints e SQLAlchemy.
+- Modelagem de dominio para fluxo financeiro com processos, pagamentos, impostos e pendencias.
+- Criacao de migrations com Alembic para evolucao segura do schema.
+- Implementacao de regras de negocio com `Decimal` para valores financeiros.
+- Importacao e conciliacao de planilhas com validacao antes da persistencia.
+- Auditoria funcional com snapshots antes/depois de alteracoes sensiveis.
+- Autenticacao, perfis, recuperacao de senha, CSRF e protecao de sessoes.
+- Organizacao de testes automatizados cobrindo comportamento fiscal, operacional e web.
+- Scripts PowerShell para execucao local em Windows e suporte a HTTPS local.
+- Preparacao profissional de repositorio publico sem exposicao de dados reais.
+
 ## Stack
 
 - Python
@@ -26,6 +57,17 @@ Esta versao foi preparada para portfolio publico. Ela nao inclui bancos de dados
 - HTML, CSS e JavaScript
 - PowerShell para scripts locais no Windows
 - Pytest
+
+## Qualidade E Validacao
+
+A versao publicada foi validada antes do push:
+
+```text
+184 testes automatizados passando
+Varredura de arquivos sensiveis no Git
+Repositorio sem banco, planilhas, certificados, backups ou .env real
+Commit publicado com e-mail noreply
+```
 
 ## Estrutura
 
