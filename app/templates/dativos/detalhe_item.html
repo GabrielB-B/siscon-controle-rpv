@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+
+{% block title %}RPVs dativos - Detalhe do item{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Detalhe do item com IRRF{% endblock %}
+
+{% block content %}
+{% import "components/value_display.html" as values %}
+
+<div class="page-header">
+    <div>
+        <h1>Detalhe do item com IRRF</h1>
+        <p class="muted">Preencha o andamento operacional individual do item.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='dativo_item', entidade_id=item.id) }}">Histórico</a>
+        <a class="btn btn-secondary" href="{{ url_retorno }}">Retornar</a>
+        <a class="btn" href="{{ url_for('dativos.detalhe_ci', ci_id=item.dativo_ci.id, retorno=url_retorno) }}">Abrir C.I.</a>
+    </div>
+</div>
+
+<form
+    method="POST"
+    action="{{ url_for('dativos.salvar_item_com_irrf', item_id=item.id, retorno=url_retorno) }}"
+    data-irrf-calculator
+    data-irrf-calc-url="{{ url_for('dativos.calcular_irrf_sugerido') }}"
+    data-payment-date-confirm="true"
+    data-payment-date-title="Confirmar data manual de pagamento"
+    data-payment-date-message="Voce alterou manualmente a data do pagamento. BI, competencia operacional e a fila mensal da REINF passarao a seguir essa data. Deseja continuar?"
+    data-payment-date-submit-label="Confirmar data manual"
+>
+    {{ csrf_input() }}
+    <input type="hidden" name="confirmar_data_pagamento_manual" value="0">
+    <input type="hidden" name="confirmar_edicao_valor_bruto" value="0">
+    <input type="hidden" value="{{ item.dativo_ci.exercicio }}" data-irrf-input="competencia">
+    <input type="hidden" value="{{ item.cpf_original }}" data-irrf-input="documento">
+    <input type="hidden" value="{{ item.tipo_documento_efetivo }}" data-irrf-input="tipo_documento">
+
+<div class="section-card">
+    <h2 class="section-card-title">Resumo do item</h2>
+    <div class="summary-grid">
+        <div class="readonly-box">
+            <strong>Exercício</strong><br>
+            {{ item.dativo_ci.exercicio_formatado }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>C.I.</strong><br>
+            {{ item.dativo_ci.processo_edoc }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Processo</strong><br>
+            {{ item.numero_processo }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Nome</strong><br>
+            {{ item.nome_beneficiario }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>{{ item.tipo_documento_efetivo }}</strong><br>
+            {{ item.documento_formatado }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Cadastrado por</strong><br>
+            {{ item.criado_por.nome if item.criado_por else '-' }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Responsável operacional</strong><br>
+            {{ item.responsavel.nome if item.responsavel else '-' }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Resumo operacional</strong><br>
+            {{ item.resumo_operacional_atual }}
+        </div>
+
+        <div
+            class="readonly-box"
+            data-sensitive-value-edit
+            data-sensitive-value-title="Confirmar edicao do valor bruto"
+            data-sensitive-value-message="Alterar o valor bruto depois do cadastro muda o valor liquido, o BI, a REINF quando houver pagamento e o historico operacional deste item. Deseja liberar a edicao?"
+        >
+            <strong>Valor bruto</strong><br>
+            <div class="sensitive-value-control">
+                <input
+                    type="text"
+                    id="valor_bruto"
+                    name="valor_bruto"
+                    value="{{ item.valor_bruto }}"
+                    data-irrf-input="valor_bruto"
+                    data-sensitive-value-input
+                    data-initial-value="{{ item.valor_bruto }}"
+                    readonly
+                    required
+                >
+                <button type="button" class="btn btn-secondary btn-sm" data-sensitive-value-action>
+                    Editar valor bruto
+                </button>
+            </div>
+            <small class="muted">Correcao registrada no historico.</small>
+        </div>
+
+        <div class="readonly-box">
+            <strong>IRRF</strong><br>
+            {{ values.render_value((item.valor_irrf or 0), 'moeda', 'inline') }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Valor líquido atual</strong><br>
+            {{ values.render_value(item.valor_liquido, 'moeda', 'inline') }}
+        </div>
+    </div>
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Andamento do item</h2>
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="valor_irrf">Valor IRRF</label>
+                <input type="text" id="valor_irrf" name="valor_irrf" value="{{ item.valor_irrf or '' }}" data-irrf-input="valor_irrf">
+            </div>
+
+            <div class="form-group full-width">
+                <div class="irrf-assist-header">
+                    <div class="irrf-assist-copy">
+                        <span class="irrf-assist-title">Calculo assistido</span>
+                        <p class="muted stacked-flow-note">Refaz a sugestao operacional do item com base no valor bruto informado acima.</p>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm" data-irrf-action="calculate">
+                        Calcular IRRF sugerido
+                    </button>
+                </div>
+                <div class="irrf-calc-panel" data-irrf-panel role="status" aria-live="polite" hidden></div>
+            </div>
+
+            <div class="form-group">
+                <label for="data_pagamento">Data de pagamento</label>
+                <input
+                    type="date"
+                    id="data_pagamento"
+                    name="data_pagamento"
+                    value="{{ item.data_pagamento_input_value }}"
+                    data-initial-value="{{ item.data_pagamento_input_value }}"
+                >
+                <small class="muted">Sem data manual, o sistema usa automaticamente o mes atual quando o item for marcado como pago ou concluido. A fila REINF acompanha essa data, mas o status e atualizado apenas na aba REINF.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="nota_empenho">NE</label>
+                <input type="text" id="nota_empenho" name="nota_empenho" value="{{ item.nota_empenho or '' }}">
+            </div>
+
+            <div class="form-group">
+                <label for="numero_se">SE</label>
+                <input type="text" id="numero_se" name="numero_se" value="{{ item.numero_se or '' }}">
+            </div>
+
+            <div class="form-group">
+                <label for="ordem_bancaria">OB principal</label>
+                <input type="text" id="ordem_bancaria" name="ordem_bancaria" value="{{ item.ordem_bancaria or '' }}">
+            </div>
+
+            <div class="hint-box full-width">
+                NE e OB do pagamento principal são únicas no sistema. Ao marcar como pago ou concluído, os dois campos se tornam obrigatórios e, se houver repetição, o sistema informa onde a referência já está.
+            </div>
+
+            <div class="form-group">
+                <label for="ob_imposto">OB IRRF</label>
+                <input type="text" id="ob_imposto" name="ob_imposto" value="{{ item.ob_imposto or '' }}">
+            </div>
+
+            <div class="form-group">
+                <label for="situacao_rpv_id">Situação do RPV</label>
+                <select id="situacao_rpv_id" name="situacao_rpv_id">
+                    {% for situacao in situacoes_rpv %}
+                        <option value="{{ situacao.id }}" {% if item.situacao_rpv_id == situacao.id %}selected{% endif %}>
+                            {{ situacao.nome }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="situacao_imposto_id">Situação do IRRF</label>
+                <select id="situacao_imposto_id" name="situacao_imposto_id">
+                    {% for situacao in situacoes_imposto %}
+                        <option value="{{ situacao.id }}" {% if item.situacao_imposto_id == situacao.id %}selected{% endif %}>
+                            {{ situacao.nome }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="readonly-box">
+                <strong>Situação REINF</strong><br>
+                {{ item.reinf_status_legivel }}
+                <br>
+                <span class="muted">Atualize esse status somente na aba REINF mensal.</span>
+            </div>
+
+            <div class="form-group full-width">
+                <label for="observacoes">Observações</label>
+                <textarea id="observacoes" name="observacoes">{{ item.observacoes or '' }}</textarea>
+            </div>
+        </div>
+
+        <button type="submit">Salvar item</button>
+</div>
+</form>
+{% endblock %}

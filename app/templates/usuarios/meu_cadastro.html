@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Meu cadastro - SISCON{% endblock %}
+{% block topbar_title %}Meu cadastro{% endblock %}
+{% block topbar_subtitle %}Identidade e contato{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Complete seu cadastro</h1>
+        <p class="muted">Antes de começar a trabalhar, confirme seus dados de contato e sua identificação no setor.</p>
+    </div>
+</div>
+
+<div class="password-callout">
+    Seu acesso foi criado pelo administrador com os dados mínimos para entrada. Complete este cadastro para liberar o uso normal do sistema e facilitar suporte, rastreabilidade e recuperação de acesso.
+</div>
+
+<form method="POST" class="user-form-card">
+    {{ csrf_input() }}
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Perfil</p>
+            <h2>Dados pessoais e funcionais</h2>
+        </div>
+    </div>
+
+    <div class="user-form-grid">
+        <div class="form-group full-width">
+            <label for="nome">Nome completo</label>
+            <input
+                type="text"
+                id="nome"
+                name="nome"
+                value="{{ form_data.get('nome', current_user.nome) }}"
+                required
+            >
+        </div>
+
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input
+                type="email"
+                id="email"
+                name="email"
+                value="{{ form_data.get('email', current_user.email or '') }}"
+                required
+            >
+        </div>
+
+        <div class="form-group">
+            <label for="telefone">Telefone</label>
+            <input
+                type="text"
+                id="telefone"
+                name="telefone"
+                value="{{ form_data.get('telefone', current_user.telefone_formatado or '') }}"
+                placeholder="(79) 99999-9999"
+                maxlength="16"
+                inputmode="numeric"
+                autocomplete="tel"
+                data-phone-field
+                required
+            >
+            <small class="muted">Informe o telefone com DDD para padronizar o contato do setor.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="cargo">Cargo</label>
+            <input
+                type="text"
+                id="cargo"
+                name="cargo"
+                value="{{ form_data.get('cargo', current_user.cargo or '') }}"
+                required
+            >
+        </div>
+
+        <div class="form-group">
+            <label for="setor">Setor</label>
+            <input
+                type="text"
+                id="setor"
+                name="setor"
+                value="{{ form_data.get('setor', current_user.setor or '') }}"
+                required
+            >
+        </div>
+
+        <div class="user-readonly">
+            <strong>Login de acesso</strong><br>
+            {{ current_user.login }}
+        </div>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit">Salvar meu cadastro</button>
+    </div>
+</form>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Login - SISCON{% endblock %}
+
+{% block content_guest %}
+{% import "components/sisco_brand.html" as sisco %}
+<div class="auth-shell">
+    <section class="auth-card auth-card-compact auth-card-login">
+        <div class="auth-hero auth-hero-login">
+            {{ sisco.mark('auth') }}
+            <h1 class="auth-title auth-title-login">SISCON</h1>
+            <p class="auth-copy auth-copy-login">Acesse sua conta</p>
+        </div>
+
+        <form method="POST" class="auth-form auth-form-login" autocomplete="on">
+            {{ csrf_input() }}
+            <div class="form-group">
+                <label for="login">Login</label>
+                <input
+                    type="text"
+                    id="login"
+                    name="login"
+                    autocomplete="username"
+                    required
+                    autofocus
+                >
+            </div>
+
+            <div class="form-group">
+                <div class="auth-label-row">
+                    <label for="senha">Senha</label>
+                    <a class="auth-link" href="{{ url_for('auth.forgot_password') }}">Esqueci minha senha</a>
+                </div>
+                <input
+                    type="password"
+                    id="senha"
+                    name="senha"
+                    autocomplete="current-password"
+                    required
+                >
+            </div>
+
+            <button type="submit">Entrar</button>
+        </form>
+    </section>
+</div>
+{% endblock %}

@@ -1,0 +1,650 @@
+{% extends "base.html" %}
+
+{% block title %}RPVs dativos - Detalhe da C.I.{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Importação e complemento manual dos itens{% endblock %}
+
+{% block content %}
+{% import "components/value_display.html" as values %}
+
+<div class="page-header">
+    <div>
+        <h1>Detalhe da C.I. de dativo</h1>
+        <p class="muted">Use as planilhas separadas quando quiser manter o fluxo atual ou a planilha unica para fazer a triagem automatica antes de importar.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='dativo_ci', entidade_id=dativo_ci.id) }}">Histórico</a>
+        <a class="btn btn-secondary" href="{{ url_retorno }}">Voltar para C.I.s</a>
+        <a class="btn" href="{{ url_for('dativos.lotes_sem_irrf') }}">Ver lotes</a>
+        <a class="btn btn-secondary" href="{{ url_for('dativos.itens_com_irrf') }}">Ver itens com IRRF</a>
+    </div>
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Resumo da C.I.</h2>
+    <div class="summary-grid">
+        <div class="readonly-box">
+            <strong>Exercício</strong><br>
+            {{ dativo_ci.exercicio_formatado }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>C.I.</strong><br>
+            {{ dativo_ci.processo_edoc }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Data da C.I.</strong><br>
+            {{ dativo_ci.data_ci.strftime('%d/%m/%Y') if dativo_ci.data_ci else '' }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Descrição</strong><br>
+            {{ dativo_ci.descricao }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Cadastrado por</strong><br>
+            {{ dativo_ci.criado_por.nome if dativo_ci.criado_por else '-' }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Responsável operacional</strong><br>
+            {{ dativo_ci.responsavel.nome if dativo_ci.responsavel else '-' }}
+        </div>
+    </div>
+
+    <form
+        method="POST"
+        action="{{ url_for('dativos.transferir_responsavel_ci', ci_id=dativo_ci.id, retorno=url_retorno) }}"
+        class="content-top-18"
+        onsubmit="return confirm('Transferir a responsabilidade desta C.I. para o usuário selecionado? Lotes e itens passarão a seguir esse responsável.');"
+    >
+        {{ csrf_input() }}
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="responsavel_id">Novo responsável</label>
+                <select id="responsavel_id" name="responsavel_id" required>
+                    {% for usuario in usuarios %}
+                        <option value="{{ usuario.id }}" {% if dativo_ci.responsavel_id == usuario.id %}selected{% endif %}>
+                            {{ usuario.nome }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <small class="muted">A responsabilidade operacional dos lotes e itens desta C.I. acompanha essa seleção.</small>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-secondary">Transferir responsabilidade</button>
+    </form>
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Importar planilha unica com triagem automatica</h2>
+    <form method="POST" action="{{ url_for('dativos.analisar_importacao_unica', ci_id=dativo_ci.id) }}" enctype="multipart/form-data">
+        {{ csrf_input() }}
+        <div class="form-group">
+            <label for="arquivo_unico">Arquivo .ods</label>
+            <input type="file" id="arquivo_unico" name="arquivo_unico" accept=".ods" required>
+        </div>
+
+        <button type="submit">Analisar planilha unica</button>
+    </form>
+
+    <div class="hint-box">
+        <strong>Regras da triagem:</strong> CPF acima de 5040 vai para com IRRF. CPF ate 5040 permanece em sem IRRF. CNPJ permanece em sem IRRF mesmo acima do corte.<br>
+        Nenhuma linha e gravada antes da confirmacao final da previa.
+    </div>
+</div>
+
+{% if importacao_unica_preview %}
+<div class="section-card content-top-18">
+    <div class="page-header page-header-inline">
+        <div>
+            <h2 class="section-card-title">Previa da planilha unica</h2>
+            <p class="muted">
+                Arquivo analisado: <strong>{{ importacao_unica_preview.nome_arquivo or 'planilha.ods' }}</strong>.
+                Revise a classificacao automatica e confirme apenas o que deve entrar agora.
+            </p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-secondary" href="{{ url_for('dativos.detalhe_ci', ci_id=dativo_ci.id) }}">Descartar previa</a>
+        </div>
+    </div>
+
+    <div class="summary-grid">
+        <div class="readonly-box">
+            <strong>Prontas sem IRRF</strong><br>
+            {{ importacao_unica_preview.resumo.total_prontas_sem_irrf }}
+        </div>
+        <div class="readonly-box">
+            <strong>Prontas com IRRF</strong><br>
+            {{ importacao_unica_preview.resumo.total_prontas_com_irrf }}
+        </div>
+        <div class="readonly-box">
+            <strong>Pendencias</strong><br>
+            {{ importacao_unica_preview.resumo.total_pendencias }}
+        </div>
+        <div class="readonly-box">
+            <strong>Erros</strong><br>
+            {{ importacao_unica_preview.resumo.total_erros }}
+        </div>
+        <div class="readonly-box">
+            <strong>Rodapes ignorados</strong><br>
+            {{ importacao_unica_preview.resumo.rodapes_ignorados }}
+        </div>
+        <div class="readonly-box">
+            <strong>CNPJ mantido em sem IRRF</strong><br>
+            {{ importacao_unica_preview.resumo.cnpjs_mantidos_sem_irrf }}
+        </div>
+    </div>
+
+    {% if importacao_unica_preview.prontas_sem_irrf %}
+    <details class="content-top-18" open>
+        <summary class="details-summary">
+            Linhas prontas para lote sem IRRF ({{ importacao_unica_preview.prontas_sem_irrf|length }})
+        </summary>
+
+        <div class="table-wrap content-top-14">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Linha</th>
+                        <th>Beneficiario</th>
+                        <th>Documento</th>
+                        <th>Processo</th>
+                        <th>Valor</th>
+                        <th>Regra aplicada</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for linha in importacao_unica_preview.prontas_sem_irrf %}
+                    <tr>
+                        <td>{{ linha.line_number }}</td>
+                        <td>
+                            {{ linha.nome }}
+                            {% if linha.ocorrencias_processo_total %}
+                                <div class="stack-meta">{{ linha.ocorrencias_processo_total }} ocorrencia(s) desse processo ja aparecem no sistema.</div>
+                            {% endif %}
+                        </td>
+                        <td>{{ linha.documento_formatado }}</td>
+                        <td>{{ linha.processo }}</td>
+                        <td>R$ {{ linha.valor_legivel }}</td>
+                        <td>{{ linha.regra_aplicada }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </details>
+    {% endif %}
+
+    {% if importacao_unica_preview.prontas_com_irrf %}
+    <details class="content-top-18" open>
+        <summary class="details-summary">
+            Linhas prontas para itens com IRRF ({{ importacao_unica_preview.prontas_com_irrf|length }})
+        </summary>
+
+        <div class="table-wrap content-top-14">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Linha</th>
+                        <th>Beneficiario</th>
+                        <th>Documento</th>
+                        <th>Processo</th>
+                        <th>Valor</th>
+                        <th>Regra aplicada</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for linha in importacao_unica_preview.prontas_com_irrf %}
+                    <tr>
+                        <td>{{ linha.line_number }}</td>
+                        <td>
+                            {{ linha.nome }}
+                            {% if linha.ocorrencias_processo_total %}
+                                <div class="stack-meta">{{ linha.ocorrencias_processo_total }} ocorrencia(s) desse processo ja aparecem no sistema.</div>
+                            {% endif %}
+                        </td>
+                        <td>{{ linha.documento_formatado }}</td>
+                        <td>{{ linha.processo }}</td>
+                        <td>R$ {{ linha.valor_legivel }}</td>
+                        <td>{{ linha.regra_aplicada }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </details>
+    {% endif %}
+
+    {% if importacao_unica_preview.pendencias %}
+    <form method="POST" action="{{ url_for('dativos.confirmar_importacao_unica', ci_id=dativo_ci.id) }}" class="content-top-18">
+        {{ csrf_input() }}
+        <input type="hidden" name="preview_token" value="{{ importacao_unica_preview.preview_token }}">
+
+        <div class="section-card warning-panel">
+            <h3 class="section-card-title">Pendencias para confirmacao</h3>
+            <p class="muted">
+                Essas linhas nao entram automaticamente. Marque apenas o que deve ser importado mesmo assim.
+            </p>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Importar</th>
+                            <th>Linha</th>
+                            <th>Beneficiario</th>
+                            <th>Destino sugerido</th>
+                            <th>Conferencia</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for linha in importacao_unica_preview.pendencias %}
+                        <tr>
+                            <td>
+                                <input type="checkbox" name="pendencias_confirmadas" value="{{ linha.preview_id }}">
+                            </td>
+                            <td>{{ linha.line_number }}</td>
+                            <td>
+                                <strong>{{ linha.nome }}</strong><br>
+                                <span class="muted">{{ linha.documento_formatado }} | {{ linha.processo }} | R$ {{ linha.valor_legivel }}</span>
+                            </td>
+                            <td>
+                                <span class="group-pill {% if linha.destino_grupo == 'sem_irrf' %}group-lote{% else %}group-item{% endif %}">
+                                    {{ linha.destino_label }}
+                                </span>
+                            </td>
+                            <td>
+                                <strong>{{ linha.motivo_pendencia }}</strong>
+                                <div class="stack-meta">{{ linha.detalhe_pendencia }}</div>
+                                {% if linha.referencias_existentes %}
+                                    <div class="stack-meta">
+                                        {% for referencia in linha.referencias_existentes %}
+                                            <div>
+                                                Ja existe em {{ referencia.grupo }}: {{ referencia.beneficiario }}
+                                                {% if referencia.abrir_url %}
+                                                    <a href="{{ referencia.abrir_url }}">Abrir</a>
+                                                {% endif %}
+                                            </div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                                {% if linha.ocorrencias_processo_total %}
+                                    <div class="stack-meta">
+                                        Processo encontrado em {{ linha.ocorrencias_processo_total }} contexto(s) do sistema.
+                                    </div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="page-actions content-top-14">
+                <button type="submit">Confirmar importacao com as pendencias marcadas</button>
+                <a class="btn btn-secondary" href="{{ url_for('dativos.detalhe_ci', ci_id=dativo_ci.id) }}">Voltar sem importar</a>
+            </div>
+        </div>
+    </form>
+    {% elif importacao_unica_preview.resumo.total_linhas_classificadas %}
+    <form method="POST" action="{{ url_for('dativos.confirmar_importacao_unica', ci_id=dativo_ci.id) }}" class="content-top-18">
+        {{ csrf_input() }}
+        <input type="hidden" name="preview_token" value="{{ importacao_unica_preview.preview_token }}">
+        <div class="page-actions">
+            <button type="submit">Confirmar importacao automatica</button>
+            <a class="btn btn-secondary" href="{{ url_for('dativos.detalhe_ci', ci_id=dativo_ci.id) }}">Voltar sem importar</a>
+        </div>
+    </form>
+    {% endif %}
+
+    {% if importacao_unica_preview.erros %}
+    <details class="content-top-18" open>
+        <summary class="details-summary">
+            Linhas com erro de leitura ({{ importacao_unica_preview.erros|length }})
+        </summary>
+
+        <ul class="helper-list content-top-14">
+            {% for erro in importacao_unica_preview.erros %}
+                <li>{{ erro }}</li>
+            {% endfor %}
+        </ul>
+    </details>
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="forms-grid">
+    <div class="section-card">
+        <h2 class="section-card-title">Importar planilha ODS sem IRRF</h2>
+        <form method="POST" action="{{ url_for('dativos.importar_sem_irrf', ci_id=dativo_ci.id) }}" enctype="multipart/form-data">
+            {{ csrf_input() }}
+            <div class="form-group">
+                <label for="arquivo_sem_irrf">Arquivo .ods</label>
+                <input type="file" id="arquivo_sem_irrf" name="arquivo_sem_irrf" accept=".ods" required>
+            </div>
+
+            <button type="submit">Importar sem IRRF</button>
+        </form>
+
+        <div class="hint-box">
+            <strong>Colunas esperadas:</strong> nome, cpf/cnpj, processo, valor.<br>
+            O sistema cria o lote sem IRRF somente quando houver pelo menos um item válido.
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2 class="section-card-title">Importar planilha ODS com IRRF</h2>
+        <form method="POST" action="{{ url_for('dativos.importar_com_irrf', ci_id=dativo_ci.id) }}" enctype="multipart/form-data">
+            {{ csrf_input() }}
+            <div class="form-group">
+                <label for="arquivo_com_irrf">Arquivo .ods</label>
+                <input type="file" id="arquivo_com_irrf" name="arquivo_com_irrf" accept=".ods" required>
+            </div>
+
+            <button type="submit">Importar com IRRF</button>
+        </form>
+
+        <div class="hint-box">
+            <strong>Colunas esperadas:</strong> nome, cpf/cnpj, processo, valor.<br>
+            O IRRF individual pode ser preenchido depois no detalhe do item.
+        </div>
+    </div>
+</div>
+
+<div class="section-card">
+    <details {% if ocorrencias_processo or formulario_origem %}open{% endif %}>
+        <summary class="details-summary">Complemento manual (caso algo fique de fora)</summary>
+
+        <div class="forms-grid content-top-18">
+            <div>
+                <h3>Adicionar manualmente ao lote sem IRRF</h3>
+                <form method="POST" action="{{ url_for('dativos.adicionar_item_sem_irrf', ci_id=dativo_ci.id) }}">
+                    {{ csrf_input() }}
+                    <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente_sem" value="{{ form_data.get('confirmar_processo_existente', '0') if formulario_origem == 'sem_irrf' else '0' }}">
+                    <div class="form-group">
+                        <label for="nome_beneficiario_sem">Nome</label>
+                        <input type="text" id="nome_beneficiario_sem" name="nome_beneficiario" value="{{ form_data.get('nome_beneficiario', '') if formulario_origem == 'sem_irrf' else '' }}" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cpf_original_sem">CPF/CNPJ</label>
+                        <input type="text" id="cpf_original_sem" name="cpf_original" value="{{ form_data.get('cpf_original', '') if formulario_origem == 'sem_irrf' else '' }}" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="numero_processo_sem">Processo</label>
+                        <input type="text" id="numero_processo_sem" name="numero_processo" value="{{ form_data.get('numero_processo', '') if formulario_origem == 'sem_irrf' else '' }}" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="valor_bruto_sem">Valor bruto</label>
+                        <input type="text" id="valor_bruto_sem" name="valor_bruto" value="{{ form_data.get('valor_bruto', '') if formulario_origem == 'sem_irrf' else '' }}" required>
+                    </div>
+
+                    <button type="submit">Adicionar manualmente ao lote sem IRRF</button>
+
+                    {% if ocorrencias_processo and formulario_origem == 'sem_irrf' %}
+                    <div class="section-card warning-panel content-top-14">
+                        <h3 class="section-card-title">Processo já encontrado no sistema</h3>
+                        <p class="muted">
+                            O número do processo informado já aparece em outros registros. Confira abaixo antes de continuar.
+                        </p>
+
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Origem</th>
+                                        <th>Responsável</th>
+                                        <th>Situação do RPV</th>
+                                        <th>Situação do IRRF</th>
+                                        <th>Resumo operacional</th>
+                                        <th>Abrir</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for ocorrencia in ocorrencias_processo %}
+                                    <tr>
+                                        <td>{{ ocorrencia.origem }}</td>
+                                        <td>{{ ocorrencia.responsavel }}</td>
+                                        <td>{{ ocorrencia.situacao_rpv }}</td>
+                                        <td>{{ ocorrencia.situacao_irrf }}</td>
+                                        <td>{{ ocorrencia.resumo_operacional }}</td>
+                                        <td>
+                                            {% if ocorrencia.abrir_url %}
+                                                <a class="btn btn-secondary btn-sm" href="{{ ocorrencia.abrir_url }}">Abrir</a>
+                                            {% else %}
+                                                -
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="content-top-14">
+                            <button
+                                type="submit"
+                                class="btn"
+                                onclick="document.getElementById('confirmar_processo_existente_sem').value='1';"
+                            >
+                                Confirmar e continuar mesmo assim
+                            </button>
+                        </div>
+                    </div>
+                    {% endif %}
+                </form>
+            </div>
+
+            <div>
+                <h3>Adicionar manualmente com IRRF</h3>
+                <form method="POST" action="{{ url_for('dativos.adicionar_item_com_irrf', ci_id=dativo_ci.id) }}" data-irrf-calculator data-irrf-calc-url="{{ url_for('dativos.calcular_irrf_sugerido') }}">
+                    {{ csrf_input() }}
+                    <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente_com" value="{{ form_data.get('confirmar_processo_existente', '0') if formulario_origem == 'com_irrf' else '0' }}">
+                    <input type="hidden" value="{{ dativo_ci.exercicio }}" data-irrf-input="competencia">
+                    <div class="form-group">
+                        <label for="nome_beneficiario_com">Nome</label>
+                        <input type="text" id="nome_beneficiario_com" name="nome_beneficiario" value="{{ form_data.get('nome_beneficiario', '') if formulario_origem == 'com_irrf' else '' }}" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cpf_original_com">CPF/CNPJ</label>
+                        <input type="text" id="cpf_original_com" name="cpf_original" value="{{ form_data.get('cpf_original', '') if formulario_origem == 'com_irrf' else '' }}" data-irrf-input="documento" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="numero_processo_com">Processo</label>
+                        <input type="text" id="numero_processo_com" name="numero_processo" value="{{ form_data.get('numero_processo', '') if formulario_origem == 'com_irrf' else '' }}" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="valor_bruto_com">Valor bruto</label>
+                        <input type="text" id="valor_bruto_com" name="valor_bruto" value="{{ form_data.get('valor_bruto', '') if formulario_origem == 'com_irrf' else '' }}" data-irrf-input="valor_bruto" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="valor_irrf_com">Valor IRRF (opcional nesta fase)</label>
+                        <input type="text" id="valor_irrf_com" name="valor_irrf" value="{{ form_data.get('valor_irrf', '') if formulario_origem == 'com_irrf' else '' }}" data-irrf-input="valor_irrf">
+                    </div>
+
+                    <div class="hint-box">
+                        <div class="irrf-assist-header">
+                            <div class="irrf-assist-copy">
+                                <span class="irrf-assist-title">Calculo assistido</span>
+                                <p class="muted stacked-flow-note">Sugere o IRRF do item usando a regra operacional de 2026 e deixa o valor pronto para revisao antes do cadastro.</p>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" data-irrf-action="calculate">
+                                Calcular IRRF sugerido
+                            </button>
+                        </div>
+                        <div class="irrf-calc-panel" data-irrf-panel role="status" aria-live="polite" hidden></div>
+                    </div>
+
+                    <button type="submit">Adicionar manualmente com IRRF</button>
+
+                    {% if ocorrencias_processo and formulario_origem == 'com_irrf' %}
+                    <div class="section-card warning-panel content-top-14">
+                        <h3 class="section-card-title">Processo já encontrado no sistema</h3>
+                        <p class="muted">
+                            O número do processo informado já aparece em outros registros. Confira abaixo antes de continuar.
+                        </p>
+
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Origem</th>
+                                        <th>Responsável</th>
+                                        <th>Situação do RPV</th>
+                                        <th>Situação do IRRF</th>
+                                        <th>Resumo operacional</th>
+                                        <th>Abrir</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for ocorrencia in ocorrencias_processo %}
+                                    <tr>
+                                        <td>{{ ocorrencia.origem }}</td>
+                                        <td>{{ ocorrencia.responsavel }}</td>
+                                        <td>{{ ocorrencia.situacao_rpv }}</td>
+                                        <td>{{ ocorrencia.situacao_irrf }}</td>
+                                        <td>{{ ocorrencia.resumo_operacional }}</td>
+                                        <td>
+                                            {% if ocorrencia.abrir_url %}
+                                                <a class="btn btn-secondary btn-sm" href="{{ ocorrencia.abrir_url }}">Abrir</a>
+                                            {% else %}
+                                                -
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="content-top-14">
+                            <button
+                                type="submit"
+                                class="btn"
+                                onclick="document.getElementById('confirmar_processo_existente_com').value='1';"
+                            >
+                                Confirmar e continuar mesmo assim
+                            </button>
+                        </div>
+                    </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </details>
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Lote sem IRRF</h2>
+    {% if lote_sem_irrf %}
+        <p><strong>Resumo operacional:</strong> {{ lote_sem_irrf.resumo_operacional }}</p>
+        <p><strong>Quantidade:</strong> {{ lote_sem_irrf.quantidade_itens }}</p>
+        <p><strong>Valor total:</strong> {{ values.render_value(lote_sem_irrf.valor_total_bruto, 'moeda', 'compact') }}</p>
+        <p><strong>NE:</strong> {{ lote_sem_irrf.nota_empenho or '-' }} | <strong>SE:</strong> {{ lote_sem_irrf.numero_se or '-' }} | <strong>OB:</strong> {{ lote_sem_irrf.ordem_bancaria or '-' }}</p>
+        <p><strong>Situação do RPV:</strong> {{ lote_sem_irrf.situacao_rpv.nome if lote_sem_irrf.situacao_rpv else '-' }}</p>
+        <p><strong>Situação do IRRF:</strong> {{ lote_sem_irrf.situacao_imposto.nome if lote_sem_irrf.situacao_imposto else '-' }}</p>
+        <p>
+            <a class="btn btn-secondary btn-sm" href="{{ url_for('dativos.detalhe_lote_sem_irrf', lote_id=lote_sem_irrf.id, retorno=url_for('dativos.detalhe_ci', ci_id=dativo_ci.id, retorno=url_retorno)) }}">
+                Abrir lote
+            </a>
+        </p>
+    {% else %}
+        <p class="muted">Nenhum item sem IRRF foi importado ou cadastrado ainda.</p>
+    {% endif %}
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Itens sem IRRF</h2>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>CPF/CNPJ</th>
+                    <th>Processo</th>
+                    <th>Valor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in itens_sem_irrf %}
+                <tr>
+                    <td>
+                        <span class="beneficiary-name-cell">
+                            <span>{{ item.nome_beneficiario }}</span>
+                            {% if item.alerta_irrf_sem_retencao_pendente %}
+                                <span
+                                    class="beneficiary-alert-marker"
+                                    title="Valor no corte operacional de IRRF. Revise este beneficiario ou confirme a dispensa na edicao."
+                                    aria-label="Pendencia de IRRF para revisao"
+                                >!</span>
+                            {% endif %}
+                        </span>
+                    </td>
+                    <td>{{ item.documento_formatado }}</td>
+                    <td>{{ item.numero_processo }}</td>
+                    <td>{{ values.render_value(item.valor_bruto, 'moeda', 'compact') }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4">Nenhum item sem IRRF cadastrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Itens com IRRF</h2>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>CPF/CNPJ</th>
+                    <th>Processo</th>
+                    <th>Valor</th>
+                    <th>IRRF</th>
+                    <th>Resumo operacional</th>
+                    <th>Ação</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in itens_com_irrf %}
+                <tr>
+                    <td>{{ item.nome_beneficiario }}</td>
+                    <td>{{ item.documento_formatado }}</td>
+                    <td>{{ item.numero_processo }}</td>
+                    <td>{{ values.render_value(item.valor_bruto, 'moeda', 'compact') }}</td>
+                    <td>{{ values.render_value((item.valor_irrf or 0), 'moeda', 'compact') }}</td>
+                    <td>{{ item.resumo_operacional_atual }}</td>
+                    <td>
+                        <div class="inline-cluster-sm">
+                            <a class="btn btn-secondary btn-sm" href="{{ url_for('dativos.detalhe_item_com_irrf', item_id=item.id, retorno=url_for('dativos.detalhe_ci', ci_id=dativo_ci.id, retorno=url_retorno)) }}">
+                                Abrir
+                            </a>
+                            <a class="btn btn-secondary btn-sm" href="{{ url_for('historico.detalhe', entidade_tipo='dativo_item', entidade_id=item.id) }}">
+                                Histórico
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7">Nenhum item com IRRF cadastrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

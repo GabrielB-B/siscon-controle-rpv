@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Documentos pendentes - SISCON{% endblock %}
+{% block topbar_title %}Documentos pendentes{% endblock %}
+{% block topbar_subtitle %}RPVs normais guardadas fora do fluxo oficial{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Documentos pendentes de RPVs</h1>
+        <p class="muted">Guarde aqui os cadastros sem CPF/CNPJ confiavel. Eles nao entram em pagamento, REINF ou BI operacional ate o documento ser validado.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('cadastros.lista_rpvs') }}">Voltar para RPVs normais</a>
+    </div>
+</div>
+
+<div class="section-card">
+    <form method="GET">
+        <div class="form-grid-3">
+            <div class="form-group">
+                <label for="q">Busca</label>
+                <input type="text" id="q" name="q" value="{{ filtro_q or '' }}" placeholder="Beneficiario, CPF/CNPJ, C.I. ou processo">
+            </div>
+            <div class="form-group">
+                <label for="responsavel">Fila</label>
+                <select id="responsavel" name="responsavel">
+                    <option value="meus" {% if filtro_responsavel == 'meus' %}selected{% endif %}>Meus cadastros e responsabilidades</option>
+                    <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>
+                        {% if current_user.is_admin %}Todos{% else %}Todos os meus{% endif %}
+                    </option>
+                    {% for usuario in usuarios %}
+                        <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>
+                            {{ usuario.nome }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="status">Status</label>
+                <select id="status" name="status">
+                    <option value="aberta" {% if filtro_status == 'aberta' %}selected{% endif %}>Em revisao</option>
+                    <option value="convertida" {% if filtro_status == 'convertida' %}selected{% endif %}>Oficializadas</option>
+                    <option value="descartada" {% if filtro_status == 'descartada' %}selected{% endif %}>Canceladas</option>
+                    <option value="todas" {% if filtro_status == 'todas' %}selected{% endif %}>Todas</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>&nbsp;</label>
+                <div class="actions">
+                    <button type="submit">Filtrar</button>
+                    <a class="btn btn-secondary" href="{{ url_for('cadastros.lista_pendencias_documentais') }}">Limpar</a>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<div class="summary-grid">
+    <div class="readonly-box">
+        <strong>Em revisao</strong><br>
+        {{ total_abertas }}
+    </div>
+    <div class="readonly-box">
+        <strong>Prontas para oficializar</strong><br>
+        {{ total_prontas }}
+    </div>
+    <div class="readonly-box">
+        <strong>Sem CPF/CNPJ</strong><br>
+        {{ total_sem_documento }}
+    </div>
+    <div class="readonly-box">
+        <strong>Valor fora do fluxo</strong><br>
+        R$ {{ total_valor_aberto|moeda_br }}
+    </div>
+</div>
+
+<div class="list-card">
+    {% if pendencias %}
+    <div class="table-wrap">
+        <table class="workbench-table is-dense">
+            <thead>
+                <tr>
+                    <th>Abertura</th>
+                    <th>Beneficiario</th>
+                    <th>Documento</th>
+                    <th>Processo</th>
+                    <th>Tipo</th>
+                    <th>Responsavel</th>
+                    <th>Cadastrado por</th>
+                    <th>Valor</th>
+                    <th>Status</th>
+                    <th>Abrir</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pendencia in pendencias %}
+                <tr>
+                    <td>{{ pendencia.criado_em.strftime('%d/%m/%Y') if pendencia.criado_em else '-' }}</td>
+                    <td>
+                        <strong>{{ pendencia.nome_beneficiario }}</strong><br>
+                        <span class="stack-meta">{{ pendencia.processo_edoc }} | {{ pendencia.numero_processo }}</span>
+                    </td>
+                    <td>
+                        {{ pendencia.tipo_documento_efetivo }} {{ pendencia.documento_formatado or '-' }}<br>
+                        <span class="stack-meta">{{ pendencia.motivo_documento_exibido }}</span>
+                    </td>
+                    <td>{{ pendencia.numero_processo }}</td>
+                    <td>{{ pendencia.tipo_rpv.nome if pendencia.tipo_rpv else '-' }}</td>
+                    <td>{{ pendencia.responsavel.nome if pendencia.responsavel else '-' }}</td>
+                    <td>{{ pendencia.criado_por.nome if pendencia.criado_por else '-' }}</td>
+                    <td>R$ {{ pendencia.valor_bruto|moeda_br }}</td>
+                    <td>
+                        <div class="user-badges">
+                            <span class="user-badge {% if pendencia.status == 'convertida' %}is-active{% elif pendencia.status == 'descartada' %}is-inactive{% else %}is-warning{% endif %}">
+                                {{ pendencia.status_legivel }}
+                            </span>
+                            <span class="user-badge {% if pendencia.pode_continuar_fluxo_oficial %}is-active{% else %}is-warning{% endif %}">
+                                {{ pendencia.documento_status_legivel }}
+                            </span>
+                        </div>
+                    </td>
+                    <td>
+                        <a class="btn btn-secondary" href="{{ url_for('cadastros.detalhe_pendencia_documental', pendencia_id=pendencia.id) }}">
+                            Abrir
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        Nenhuma pendencia documental apareceu neste recorte.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

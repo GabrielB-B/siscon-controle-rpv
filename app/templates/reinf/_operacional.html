@@ -1,0 +1,326 @@
+{% if competencia_bloqueada %}
+    <div class="flash flash-warning">
+        O fechamento do REINF permanece em <strong>{{ competencia_legivel(competencia_bloqueada) }}</strong>
+        porque ainda existem pagamentos dessa competência pendentes de confirmação.
+    </div>
+{% elif competencias_pendentes %}
+    <div class="flash flash-info">
+        Competências ainda com pendências de REINF:
+        <strong>
+            {% for competencia in competencias_pendentes %}
+                {{ competencia_legivel(competencia) }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+        </strong>
+    </div>
+{% endif %}
+
+<section class="filters-card">
+    <details class="filters-toggle" data-filter-panel="reinf" {% if filtros_abertos_operacional %}open{% endif %}>
+        <summary>
+            <span>Filtros de pesquisa</span>
+            <span class="arrow">▼</span>
+        </summary>
+
+        <div class="filters-body">
+            <form method="GET" id="reinf-filter-form">
+                <input type="hidden" name="visao" value="operacional">
+                <input type="hidden" name="por_pagina" value="{{ por_pagina }}">
+
+                <div class="reinf-filter-grid">
+                    <div class="form-group">
+                        <label for="competencia">Competência</label>
+                        <input type="month" id="competencia" name="competencia" value="{{ filtro_competencia }}">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="q">Busca</label>
+                        <input
+                            type="text"
+                            id="q"
+                            name="q"
+                            value="{{ filtro_busca }}"
+                            placeholder="Nome, CPF/CNPJ, processo, C.I. ou resumo"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="responsavel">Responsável</label>
+                        <select id="responsavel" name="responsavel">
+                            <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                            {% for usuario in usuarios %}
+                                <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>
+                                    {{ usuario.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="reinf_status">Status REINF</label>
+                        <select id="reinf_status" name="reinf_status">
+                            {% for valor, label in reinf_status_filtros %}
+                                <option value="{{ valor }}" {% if filtro_reinf_status == valor %}selected{% endif %}>
+                                    {{ label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ordenar">Ordenar por</label>
+                        <select id="ordenar" name="ordenar">
+                            {% for valor, label in reinf_ordenacao_opcoes %}
+                                <option value="{{ valor }}" {% if ordenar_atual == valor %}selected{% endif %}>
+                                    {{ label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="direcao">Direção</label>
+                        <select id="direcao" name="direcao">
+                            {% for valor, label in reinf_direcao_opcoes %}
+                                <option value="{{ valor }}" {% if direcao_atual == valor %}selected{% endif %}>
+                                    {{ label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="reinf-filter-actions">
+                        <button type="submit">Aplicar filtros</button>
+                        <a class="btn btn-ghost" href="{{ url_for('reinf.index', sem_favorito=1) }}">Limpar</a>
+                    </div>
+                </div>
+            </form>
+
+            {% set saved_filter_scope = 'reinf' %}
+            {% set saved_filter_form_id = 'reinf-filter-form' %}
+            {% set saved_filter_base_url = url_for('reinf.index') %}
+            {% set saved_filter_help = 'Salve recortes mensais da REINF para conferência, exportação e fechamento.' %}
+            {% set saved_filter_embedded = true %}
+            {% include "components/saved_filters_bar.html" %}
+        </div>
+    </details>
+</section>
+
+<div class="filter-info">
+    <div><strong>Competência:</strong> {{ filtro_competencia }}</div>
+    <div>
+        <strong>Responsável:</strong>
+        {% if filtro_responsavel and filtro_responsavel != 'todos' %}
+            {% for usuario in usuarios %}
+                {% if filtro_responsavel == usuario.id|string %}
+                    {{ usuario.nome }}
+                {% endif %}
+            {% endfor %}
+        {% else %}
+            Todos
+        {% endif %}
+    </div>
+    <div><strong>Total encontrado:</strong> {{ paginacao.total_itens }}</div>
+    <div><strong>Mostrando:</strong> {{ paginacao.inicio }}-{{ paginacao.fim }}</div>
+</div>
+
+<div class="workbench-toolbar">
+    <div class="workbench-summary">
+        <div><strong>Ordenação:</strong> {{ reinf_ordenacao_labels.get(ordenar_atual, ordenar_atual|replace('_', ' ')|title) }}</div>
+        <div><strong>Direção:</strong> {% if direcao_atual == 'asc' %}Crescente{% else %}Decrescente{% endif %}</div>
+    </div>
+
+    <div class="workbench-controls">
+        <form method="GET">
+            {% for chave, valor in filtros_ocultos.items() %}
+                <input type="hidden" name="{{ chave }}" value="{{ valor }}">
+            {% endfor %}
+            <span class="compact-label">Mostrar por página</span>
+            <select class="compact-select" name="por_pagina" data-auto-submit>
+                {% for opcao in [10, 20, 50, 100] %}
+                    <option value="{{ opcao }}" {% if por_pagina == opcao %}selected{% endif %}>{{ opcao }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+</div>
+
+<section class="card">
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Fila</p>
+            <h2>Pagamentos prontos para conferência e envio</h2>
+        </div>
+        <div class="muted">
+            Use a seleção em lote depois de concluir a prestação no portal do governo.
+        </div>
+    </div>
+
+    <div class="reinf-toolbar">
+        <form id="reinf-bulk-form" method="POST" action="{{ url_for('reinf.atualizar_status_lote') }}" class="reinf-bulk-actions">
+            {{ csrf_input() }}
+            <select name="reinf_status_lote">
+                {% for opcao in reinf_status_opcoes %}
+                    <option value="{{ opcao }}">{{ opcao }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-secondary">Atualizar selecionados</button>
+        </form>
+    </div>
+
+    {% if registros %}
+        <div class="table-wrap">
+            <table class="reinf-table is-dense">
+                <thead>
+                    <tr>
+                        <th class="col-select sticky-cell sticky-left-1">
+                            <input type="checkbox" data-reinf-select-all aria-label="Selecionar todos">
+                        </th>
+                        <th class="sticky-cell sticky-left-2">
+                            <a class="table-sort-link {% if ordenar_atual == 'origem' %}is-active{% endif %}" href="{{ sort_urls.origem }}">
+                                Origem
+                                {% if ordenar_atual == 'origem' %}
+                                    <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link {% if ordenar_atual == 'competencia' %}is-active{% endif %}" href="{{ sort_urls.competencia }}">
+                                Competência
+                                {% if ordenar_atual == 'competencia' %}
+                                    <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link {% if ordenar_atual == 'data_pagamento' %}is-active{% endif %}" href="{{ sort_urls.data_pagamento }}">
+                                Data pgto
+                                {% if ordenar_atual == 'data_pagamento' %}
+                                    <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link {% if ordenar_atual == 'beneficiario' %}is-active{% endif %}" href="{{ sort_urls.beneficiario }}">
+                                Beneficiário
+                                {% if ordenar_atual == 'beneficiario' %}
+                                    <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th>Resumo operacional</th>
+                        <th>
+                            <a class="table-sort-link {% if ordenar_atual == 'imposto' %}is-active{% endif %}" href="{{ sort_urls.imposto }}">
+                                IRRF
+                                {% if ordenar_atual == 'imposto' %}
+                                    <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link {% if ordenar_atual == 'status_reinf' %}is-active{% endif %}" href="{{ sort_urls.status_reinf }}">
+                                Status REINF
+                                {% if ordenar_atual == 'status_reinf' %}
+                                    <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th class="table-actions-cell sticky-cell sticky-right-1">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for registro in registros %}
+                        <tr>
+                            <td class="table-select-cell sticky-cell sticky-left-1">
+                                <input
+                                    type="checkbox"
+                                    name="selecionados"
+                                    value="{{ registro.origem }}:{{ registro.registro_id }}"
+                                    form="reinf-bulk-form"
+                                    aria-label="Selecionar {{ registro.beneficiario }} {{ registro.documento_limpo }}"
+                                >
+                            </td>
+                            <td class="sticky-cell sticky-left-2">{{ registro.tipo_origem }}</td>
+                            <td>{{ registro.competencia }}</td>
+                            <td>{{ registro.data_pagamento.strftime('%d/%m/%Y') if registro.data_pagamento else '-' }}</td>
+                            <td>
+                                <div class="reinf-person">
+                                    <strong>{{ registro.beneficiario }}</strong>
+                                    <span>{{ registro.documento_limpo }}</span>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="resumo-box">
+                                    {{ registro.resumo_operacional }}
+                                </div>
+                            </td>
+                            <td class="reinf-money">
+                                {{ values.render_value(registro.imposto, 'moeda', 'compact') }}
+                            </td>
+                            <td>
+                                <form method="POST" action="{{ url_for('reinf.atualizar_status') }}" class="reinf-inline-form">
+                                    {{ csrf_input() }}
+                                    <input type="hidden" name="origem" value="{{ registro.origem }}">
+                                    <input type="hidden" name="registro_id" value="{{ registro.registro_id }}">
+                                    <div class="reinf-inline-actions">
+                                        <select name="reinf_status" class="status-inline">
+                                            {% for opcao in reinf_status_opcoes %}
+                                                <option value="{{ opcao }}" {% if registro.reinf_status == opcao %}selected{% endif %}>
+                                                    {{ opcao }}
+                                                </option>
+                                            {% endfor %}
+                                        </select>
+                                        <button type="submit" class="btn btn-ghost btn-sm">Salvar</button>
+                                    </div>
+                                </form>
+                            </td>
+                            <td class="sticky-cell sticky-right-1">
+                                <div class="actions-inline">
+                                    <a class="btn btn-secondary btn-sm" href="{{ registro.abrir_url }}">Abrir</a>
+                                    {% if current_user.is_admin and registro.reinf_status %}
+                                    <form method="POST" action="{{ url_for('reinf.limpar_status') }}" onsubmit="return confirm('Limpar o status REINF deste registro? Use apenas para correção de teste ou lançamento indevido.');">
+                                        {{ csrf_input() }}
+                                        <input type="hidden" name="origem" value="{{ registro.origem }}">
+                                        <input type="hidden" name="registro_id" value="{{ registro.registro_id }}">
+                                        <button type="submit" class="btn btn-secondary btn-sm">Limpar (admin)</button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="pagination-bar">
+            <div class="pagination-status">
+                Página {{ paginacao.pagina }} de {{ paginacao.total_paginas }}
+            </div>
+            <div class="pagination-links">
+                {% if pagina_anterior_url %}
+                    <a class="pagination-link" href="{{ pagina_anterior_url }}">Anterior</a>
+                {% else %}
+                    <span class="pagination-link is-disabled">Anterior</span>
+                {% endif %}
+
+                {% for numero in paginas_visiveis %}
+                    {% if numero == paginacao.pagina %}
+                        <span class="pagination-link is-current">{{ numero }}</span>
+                    {% else %}
+                        <a class="pagination-link" href="{{ pagina_urls[numero] }}">{{ numero }}</a>
+                    {% endif %}
+                {% endfor %}
+
+                {% if proxima_pagina_url %}
+                    <a class="pagination-link" href="{{ proxima_pagina_url }}">Próxima</a>
+                {% else %}
+                    <span class="pagination-link is-disabled">Próxima</span>
+                {% endif %}
+            </div>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            Nenhum pagamento com IRRF foi encontrado para essa competência e esse filtro.
+        </div>
+    {% endif %}
+</section>

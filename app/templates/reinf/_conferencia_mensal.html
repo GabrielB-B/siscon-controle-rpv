@@ -1,0 +1,127 @@
+<section class="card">
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Competencia paga</p>
+            <h2>Conferencia mensal por beneficiario</h2>
+            <p class="section-caption">
+                So entram pagamentos com IRRF. O valor base soma todos os processos pagos no mes para a mesma pessoa.
+            </p>
+        </div>
+    </div>
+
+    <form method="GET" class="reinf-conference-bar">
+        <input type="hidden" name="visao" value="conferencia_mensal">
+        <input type="hidden" name="q" value="{{ filtro_busca }}">
+        <input type="hidden" name="responsavel" value="{{ filtro_responsavel }}">
+        <div class="form-group">
+            <label for="competencia-conferencia">Exercicio pago</label>
+            <input type="month" id="competencia-conferencia" name="competencia" value="{{ filtro_competencia }}">
+        </div>
+        <button type="submit" class="btn btn-secondary">Atualizar leitura</button>
+        <a class="btn btn-ghost" href="{{ url_for('reinf.index', visao='conferencia_mensal', competencia=filtro_competencia) }}">Limpar</a>
+    </form>
+
+    <details class="filters-toggle filters-toggle-soft reinf-conference-filters" {% if filtros_abertos_conferencia %}open{% endif %}>
+        <summary>
+            <span>Refinar busca</span>
+            <span class="arrow">▼</span>
+        </summary>
+        <div class="filters-body">
+            <form method="GET" class="reinf-filter-grid">
+                <input type="hidden" name="visao" value="conferencia_mensal">
+                <input type="hidden" name="competencia" value="{{ filtro_competencia }}">
+                <div class="form-group">
+                    <label for="q-conferencia-mensal">Busca</label>
+                    <input type="text" id="q-conferencia-mensal" name="q" value="{{ filtro_busca }}" placeholder="Nome, CPF/CNPJ, processo ou C.I.">
+                </div>
+                <div class="form-group">
+                    <label for="responsavel-conferencia-mensal">Responsável</label>
+                    <select id="responsavel-conferencia-mensal" name="responsavel">
+                        <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                        {% for usuario in usuarios %}
+                            <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>{{ usuario.nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="reinf-filter-actions">
+                    <button type="submit">Aplicar</button>
+                </div>
+            </form>
+        </div>
+    </details>
+</section>
+
+<div class="filter-info">
+    <div><strong>Exercicio:</strong> {{ competencia_legivel(filtro_competencia) }}</div>
+    <div><strong>Beneficiarios:</strong> {{ conferencia_mensal.totais.beneficiarios }}</div>
+    <div><strong>Valor base:</strong> {{ values.render_value(conferencia_mensal.totais.valor_base, 'moeda', 'compact') }}</div>
+    <div><strong>IRRF retido:</strong> {{ values.render_value(conferencia_mensal.totais.valor_irrf, 'moeda', 'compact') }}</div>
+</div>
+
+<section class="card">
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Tabela limpa</p>
+            <h2>Resumo mensal de conferencia REINF</h2>
+        </div>
+    </div>
+
+    {% if conferencia_mensal.tem_dados %}
+        <div class="table-wrap">
+            <table class="reinf-table reinf-conference-table">
+                <thead>
+                    <tr>
+                        <th>Exercicio</th>
+                        <th>Nome</th>
+                        <th>CPF/CNPJ</th>
+                        <th>Valor base</th>
+                        <th>IRRF retido</th>
+                        <th>Detalhar</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for linha in conferencia_mensal.linhas %}
+                        {% set detalhe_id = "reinf-mensal-detalhe-" ~ loop.index %}
+                        <tr class="reinf-conference-summary-row">
+                            <td>{{ linha.competencia_label }}</td>
+                            <td><strong>{{ linha.beneficiario }}</strong></td>
+                            <td>{{ linha.documento }}</td>
+                            <td>{{ values.render_value(linha.valor_base, 'moeda', 'compact') }}</td>
+                            <td>{{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</td>
+                            <td class="reinf-conference-action-cell">
+                                <button
+                                    type="button"
+                                    class="btn btn-ghost btn-sm reinf-detail-trigger"
+                                    data-detail-target="{{ detalhe_id }}"
+                                    data-label-closed="Ver processos"
+                                    data-label-open="Fechar processos"
+                                    aria-expanded="false"
+                                    aria-controls="{{ detalhe_id }}"
+                                >
+                                    Ver processos
+                                </button>
+                            </td>
+                        </tr>
+                        <tr id="{{ detalhe_id }}" class="reinf-conference-detail-row" hidden>
+                            <td colspan="6">
+                                <div class="reinf-conference-detail-panel">
+                                    {{ conferencia.render_conferencia_mensal_painel(linha, values) }}
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    <tr class="table-total-row">
+                        <td colspan="3"><strong>Total do mes</strong></td>
+                        <td><strong>{{ values.render_value(conferencia_mensal.totais.valor_base, 'moeda', 'compact') }}</strong></td>
+                        <td><strong>{{ values.render_value(conferencia_mensal.totais.valor_irrf, 'moeda', 'compact') }}</strong></td>
+                        <td><strong>{{ values.render_value(conferencia_mensal.totais.pagamentos, 'numero', 'compact') }} processo(s)</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            Nenhum pagamento com IRRF foi encontrado para essa competencia na conferencia mensal.
+        </div>
+    {% endif %}
+</section>

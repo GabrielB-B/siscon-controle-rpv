@@ -1,0 +1,452 @@
+﻿{% extends "base.html" %}
+
+{% block title %}RPVs normais - SISCON{% endblock %}
+{% block topbar_title %}RPVs normais{% endblock %}
+{% block topbar_subtitle %}Fila operacional dos registros normais{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>RPVs normais</h1>
+        <p class="muted">Fila operacional resumida para conduzir as RPVs normais do setor.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('dashboard.index') }}">Retornar</a>
+        <a class="btn btn-secondary" href="{{ url_for('cadastros.lista_pendencias_documentais') }}">
+            Pendencias documentais{% if total_pendencias_documentais %} ({{ total_pendencias_documentais }}){% endif %}
+        </a>
+        <a class="btn" href="{{ url_for('cadastros.novo_rpv') }}">Nova RPV normal</a>
+    </div>
+</div>
+
+<div class="filters-card">
+    <details class="filters-toggle"
+        data-filter-panel="rpvs"
+        {% if filtros.get('q') or filtros.get('ne') or filtros.get('exercicio') or filtros.get('responsavel') not in [None, '', 'todos', 'meus'] or filtros.get('situacao_empenho_id') or filtros.get('situacao_imposto_id') or mostrar_encerrados %}
+            open
+        {% endif %}
+    >
+        <summary>
+            <span>Filtros de pesquisa</span>
+            <span class="arrow">▼</span>
+        </summary>
+
+        <div class="filters-body">
+            <form method="GET" id="rpvs-filter-form">
+                <input type="hidden" name="ordenar" value="{{ ordenar_atual }}">
+                <input type="hidden" name="direcao" value="{{ direcao_atual }}">
+                <input type="hidden" name="por_pagina" value="{{ por_pagina }}">
+
+                <div class="rpv-filter-grid">
+                    <div class="form-group">
+                        <label for="q">Busca</label>
+                        <input
+                            type="text"
+                            id="q"
+                            name="q"
+                            placeholder="Nome, documento, processo, C.I. ou resumo"
+                            value="{{ filtros.get('q', '') }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ne">NE</label>
+                        <input
+                            type="text"
+                            id="ne"
+                            name="ne"
+                            placeholder="Ex.: 25"
+                            value="{{ filtros.get('ne', '') }}"
+                        >
+                    </div>
+                    <div class="form-group">
+                        <label for="exercicio">Exercício</label>
+                        <input type="month" id="exercicio" name="exercicio" value="{{ filtros.get('exercicio', '') }}">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="responsavel">Responsável</label>
+                        <select id="responsavel" name="responsavel">
+                            <option value="meus" {% if filtro_responsavel == 'meus' %}selected{% endif %}>Só os meus</option>
+                            <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                            {% for usuario in usuarios %}
+                                <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>
+                                    {{ usuario.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="situacao_empenho_id">Situação empenho</label>
+                        <select id="situacao_empenho_id" name="situacao_empenho_id">
+                            <option value="">Todas</option>
+                            {% for situacao in situacoes_empenho %}
+                                <option value="{{ situacao.id }}" {% if filtros.get('situacao_empenho_id') == situacao.id|string %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="situacao_imposto_id">Situação imposto</label>
+                        <select id="situacao_imposto_id" name="situacao_imposto_id">
+                            <option value="">Todas</option>
+                            {% for situacao in situacoes_imposto %}
+                                <option value="{{ situacao.id }}" {% if filtros.get('situacao_imposto_id') == situacao.id|string %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-inline" for="mostrar_encerrados">
+                            <input
+                                type="checkbox"
+                                id="mostrar_encerrados"
+                                name="mostrar_encerrados"
+                                value="1"
+                                {% if mostrar_encerrados %}checked{% endif %}
+                            >
+                            <span>Incluir concluídos e cancelados</span>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <button type="submit">Filtrar</button>
+                    </div>
+
+                    <div class="form-group">
+                        <a class="btn btn-secondary" href="{{ url_for('cadastros.lista_rpvs', sem_favorito=1) }}">Limpar</a>
+                    </div>
+                </div>
+            </form>
+
+            {% set saved_filter_scope = 'rpvs' %}
+            {% set saved_filter_form_id = 'rpvs-filter-form' %}
+            {% set saved_filter_base_url = url_for('cadastros.lista_rpvs') %}
+            {% set saved_filter_help = 'Guarde recortes do acompanhamento para abrir o setor no mesmo filtro de trabalho.' %}
+            {% set saved_filter_embedded = true %}
+            {% include "components/saved_filters_bar.html" %}
+        </div>
+    </details>
+</div>
+
+{% set processo_crosscheck_scope = 'rpvs' %}
+{% set processo_crosscheck_grade_vazia = not registros %}
+{% include "components/processo_crosscheck_card.html" %}
+
+<div class="list-card">
+    <div class="workbench-toolbar">
+        <div class="workbench-summary">
+            <div><strong>Responsável:</strong>
+                {% if filtro_responsavel == 'meus' %}
+                    Só os meus
+                {% elif filtro_responsavel and filtro_responsavel != 'todos' %}
+                    {% for usuario in usuarios %}
+                        {% if filtro_responsavel == usuario.id|string %}
+                            {{ usuario.nome }}
+                        {% endif %}
+                    {% endfor %}
+                {% else %}
+                    Todos
+                {% endif %}
+            </div>
+            <div><strong>Visão:</strong> {% if mostrar_encerrados %}Todos os status{% else %}Fila ativa{% endif %}</div>
+            <div><strong>Total encontrado:</strong> {{ paginacao.total_itens }}</div>
+            <div><strong>Mostrando:</strong> {{ paginacao.inicio }}-{{ paginacao.fim }}</div>
+        </div>
+
+        <div class="workbench-controls">
+            <form method="GET">
+                {% for chave, valor in filtros_ocultos.items() %}
+                    <input type="hidden" name="{{ chave }}" value="{{ valor }}">
+                {% endfor %}
+                <span class="compact-label">Mostrar por página</span>
+                <select class="compact-select" name="por_pagina" data-auto-submit>
+                    {% for opcao in [10, 20, 50, 100] %}
+                        <option value="{{ opcao }}" {% if por_pagina == opcao %}selected{% endif %}>{{ opcao }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+    </div>
+
+    <div class="batch-toolbar">
+        <form
+            id="rpv-batch-form"
+            class="batch-form"
+            method="POST"
+            action="{{ url_for('cadastros.atualizacao_lote_rpvs', **filtros.to_dict()) }}"
+            data-batch-form
+            data-batch-confirm="Aplicar a atualização em lote nos RPVs selecionados?"
+        >
+            {{ csrf_input() }}
+            <select name="situacao_empenho_id_lote">
+                <option value="">Manter situação de empenho</option>
+                {% for situacao in situacoes_empenho %}
+                    <option value="{{ situacao.id }}">{{ situacao.nome }}</option>
+                {% endfor %}
+            </select>
+
+            <select name="situacao_imposto_id_lote">
+                <option value="">Manter situação de imposto</option>
+                {% for situacao in situacoes_imposto %}
+                    <option value="{{ situacao.id }}">{{ situacao.nome }}</option>
+                {% endfor %}
+            </select>
+
+            <button type="submit" class="btn btn-secondary">Atualizar selecionados</button>
+        </form>
+
+        <div class="batch-note">
+            Use o lote para mudar situações sem alterar NE, OB ou dados financeiros.
+        </div>
+    </div>
+
+    <div class="table-view-shell view-resumida" data-view-scope="rpvs" data-view-default="resumida">
+        <div class="view-toolbar">
+            <div class="view-toolbar-label">Visão da grade</div>
+            <div class="view-options" role="group" aria-label="Presets de visualização do acompanhamento">
+                <button type="button" class="view-option is-active" data-view-option="resumida">Resumida</button>
+                <button type="button" class="view-option" data-view-option="pagamento">Pagamento</button>
+                <button type="button" class="view-option" data-view-option="fiscal">Fiscal</button>
+            </div>
+        </div>
+
+    <div class="table-wrap">
+        <table class="workbench-table rpv-table is-dense">
+            <thead>
+                <tr>
+                    <th class="col-select sticky-cell sticky-left-1">
+                        <input type="checkbox" data-batch-select-all="rpv-batch-form" aria-label="Selecionar todos os RPVs">
+                    </th>
+                    <th class="col-exercicio sticky-cell sticky-left-2">
+                        <a class="table-sort-link {% if ordenar_atual == 'competencia' %}is-active{% endif %}" href="{{ sort_urls.competencia }}">
+                            Exercício
+                            {% if ordenar_atual == 'competencia' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-processo">
+                        <a class="table-sort-link {% if ordenar_atual == 'processo' %}is-active{% endif %}" href="{{ sort_urls.processo }}">
+                            Processo
+                            {% if ordenar_atual == 'processo' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-resumo">
+                        <a class="table-sort-link {% if ordenar_atual == 'resumo' %}is-active{% endif %}" href="{{ sort_urls.resumo }}">
+                            Resumo operacional
+                            {% if ordenar_atual == 'resumo' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-valor">
+                        <a class="table-sort-link {% if ordenar_atual == 'valor' %}is-active{% endif %}" href="{{ sort_urls.valor }}">
+                            Valor
+                            {% if ordenar_atual == 'valor' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-imposto view-fiscal">
+                        <a class="table-sort-link {% if ordenar_atual == 'imposto' %}is-active{% endif %}" href="{{ sort_urls.imposto }}">
+                            Imposto
+                            {% if ordenar_atual == 'imposto' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-curta view-pagamento">NE</th>
+                    <th class="col-curta view-pagamento">OB</th>
+                    <th class="col-curta view-fiscal">OB IRRF</th>
+                    <th class="table-status-cell view-pagamento">Situação empenho</th>
+                    <th class="table-status-cell view-fiscal">Situação imposto</th>
+                    <th class="table-actions-cell sticky-cell sticky-right-1">Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for registro in registros %}
+                <form
+                    id="quick-form-{{ registro.id }}"
+                    method="POST"
+                    action="{{ url_for('cadastros.atualizacao_rapida_rpv', registro_id=registro.id, **filtros.to_dict()) }}"
+                >
+                    {{ csrf_input() }}
+                </form>
+                <tr class="{% if registro.sem_irrf_efetivo %}row-no-fiscal{% endif %}">
+                    <td class="table-select-cell sticky-cell sticky-left-1">
+                        <input
+                            type="checkbox"
+                            name="selecionados"
+                            value="{{ registro.id }}"
+                            form="rpv-batch-form"
+                            data-batch-checkbox="rpv-batch-form"
+                            aria-label="Selecionar {{ registro.nome_beneficiario }}"
+                        >
+                    </td>
+                    <td class="sticky-cell sticky-left-2">{{ registro.competencia_operacional }}</td>
+                    <td>{{ registro.processo.numero_processo }}</td>
+                    <td>
+                        <div class="summary-main-row">
+                            <div class="resumo-box">
+                                {{ registro.resumo_operacional }}
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm summary-copy-btn" data-copy-target="resumo-{{ registro.id }}">Copiar</button>
+                        </div>
+                        <div class="summary-meta-row">
+                            <span class="summary-meta-pill">
+                                {{ registro.tipo_documento_efetivo }}: {{ registro.documento_formatado }}
+                            </span>
+                            <span class="summary-meta-pill">
+                                {% if registro.sem_irrf_efetivo %}
+                                    IRRF: Sem IRRF
+                                {% elif registro.valor_irrf %}
+                                    IRRF: R$ {{ registro.valor_irrf|moeda_br }}
+                                {% else %}
+                                    IRRF: Pendente
+                                {% endif %}
+                            </span>
+                            <span class="summary-meta-pill">
+                                Responsavel:
+                                {{ registro.elaborador.nome if registro.elaborador else (registro.criado_por.nome if registro.criado_por else 'Nao informado') }}
+                            </span>
+                            {% if registro.numero_se %}
+                                <span class="summary-meta-pill">
+                                    SE: {{ registro.numero_se }}
+                                </span>
+                            {% endif %}
+                        </div>
+                        <div class="summary-status-row summary-only">
+                            <span class="summary-status-pill {{ registro.situacao_empenho.cor_badge or 'badge-slate' }}">
+                                Empenho: {{ registro.situacao_empenho.nome if registro.situacao_empenho else 'Sem situação' }}
+                            </span>
+                            <span class="summary-status-pill {{ registro.situacao_imposto.cor_badge or 'badge-slate' }}">
+                                IRRF: {{ registro.situacao_imposto.nome if registro.situacao_imposto else 'Sem situação' }}
+                            </span>
+                        </div>
+                        <input type="hidden" id="resumo-{{ registro.id }}" value="{{ registro.resumo_operacional }}">
+                    </td>
+                    <td>R$ {{ registro.valor_bruto|moeda_br }}</td>
+                    <td class="view-fiscal">
+                        {% if registro.sem_irrf_efetivo %}
+                            <span class="muted">Não se aplica</span>
+                        {% else %}
+                            R$ {{ (registro.valor_irrf or 0)|moeda_br }}
+                        {% endif %}
+                    </td>
+                    <td class="view-pagamento">
+                        <input
+                            class="inline-input"
+                            type="text"
+                            name="nota_empenho"
+                            value="{{ registro.nota_empenho or '' }}"
+                            title="NE única no sistema e obrigatória ao marcar como pago ou concluído."
+                            form="quick-form-{{ registro.id }}"
+                        >
+                    </td>
+                    <td class="view-pagamento">
+                        <input
+                            class="inline-input"
+                            type="text"
+                            name="ordem_bancaria"
+                            value="{{ registro.ordem_bancaria or '' }}"
+                            title="OB principal única no sistema e obrigatória ao marcar como pago ou concluído."
+                            form="quick-form-{{ registro.id }}"
+                        >
+                    </td>
+                    <td class="view-fiscal">
+                        {% if registro.sem_irrf_efetivo %}
+                            <span class="muted">Não se aplica</span>
+                        {% else %}
+                            <input
+                                class="inline-input"
+                                type="text"
+                                name="ob_imposto"
+                                value="{{ registro.ob_imposto or '' }}"
+                                form="quick-form-{{ registro.id }}"
+                            >
+                        {% endif %}
+                    </td>
+                    <td class="view-pagamento">
+                        <select
+                            class="status-select status-colorized"
+                            name="situacao_empenho_id"
+                            form="quick-form-{{ registro.id }}"
+                        >
+                            {% for situacao in situacoes_empenho %}
+                                <option value="{{ situacao.id }}" {% if registro.situacao_empenho_id == situacao.id %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td class="view-fiscal">
+                        {% if registro.sem_irrf_efetivo %}
+                            <span class="summary-meta-pill">Sem IRRF</span>
+                        {% else %}
+                            <select
+                                class="status-select status-colorized"
+                                name="situacao_imposto_id"
+                                form="quick-form-{{ registro.id }}"
+                            >
+                                {% for situacao in situacoes_imposto %}
+                                    <option value="{{ situacao.id }}" {% if registro.situacao_imposto_id == situacao.id %}selected{% endif %}>
+                                        {{ situacao.nome }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        {% endif %}
+                    </td>
+                    <td class="sticky-cell sticky-right-1">
+                        <div class="table-inline-actions">
+                            <button type="submit" class="btn btn-sm" form="quick-form-{{ registro.id }}">Salvar</button>
+                            <a class="btn btn-secondary btn-sm" href="{{ url_for('cadastros.editar_rpv', registro_id=registro.id, retorno=url_retorno_atual) }}">Abrir</a>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="12">Nenhum registro encontrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    </div>
+
+    <div class="pagination-bar">
+        <div class="pagination-status">
+            Página {{ paginacao.pagina }} de {{ paginacao.total_paginas }}
+        </div>
+        <div class="pagination-links">
+            {% if pagina_anterior_url %}
+                <a class="pagination-link" href="{{ pagina_anterior_url }}">Anterior</a>
+            {% else %}
+                <span class="pagination-link is-disabled">Anterior</span>
+            {% endif %}
+
+            {% for numero in paginas_visiveis %}
+                {% if numero == paginacao.pagina %}
+                    <span class="pagination-link is-current">{{ numero }}</span>
+                {% else %}
+                    <a class="pagination-link" href="{{ pagina_urls[numero] }}">{{ numero }}</a>
+                {% endif %}
+            {% endfor %}
+
+            {% if proxima_pagina_url %}
+                <a class="pagination-link" href="{{ proxima_pagina_url }}">Próxima</a>
+            {% else %}
+                <span class="pagination-link is-disabled">Próxima</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+

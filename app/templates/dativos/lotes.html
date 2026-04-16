@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+
+{% block title %}Lotes sem IRRF - RPVs dativos{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Lotes sem IRRF em andamento{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Lotes sem IRRF</h1>
+        <p class="muted">Visao principal do modulo de dativos para trabalho em lote.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('dashboard.index') }}">Retornar</a>
+        <a class="btn" href="{{ url_for('dativos.lista_cis') }}">Ver C.I.s</a>
+        <a class="btn btn-secondary" href="{{ url_for('dativos.itens_com_irrf') }}">Ver itens com IRRF</a>
+        <a class="btn btn-secondary" href="{{ url_for('dativos.novo_ci') }}">Nova C.I.</a>
+    </div>
+</div>
+
+<div class="filters-card">
+    <details class="filters-toggle"
+        data-filter-panel="dativos_lotes"
+        {% if filtros.get('q') or filtros.get('ci') or filtros.get('ne') or filtros.get('exercicio') or filtros.get('responsavel') not in [None, '', 'todos', 'meus'] or filtros.get('situacao_rpv_id') or mostrar_encerrados %}
+            open
+        {% endif %}
+    >
+        <summary>
+            <span>Filtros de pesquisa</span>
+            <span class="arrow">▼</span>
+        </summary>
+
+        <div class="filters-body">
+            <form method="GET" id="dativos-lotes-filter-form">
+                <div class="filters-grid-lotes">
+                    <div class="form-group">
+                        <label for="q">Busca</label>
+                        <input
+                            type="text"
+                            id="q"
+                            name="q"
+                            placeholder="C.I., resumo ou NE"
+                            value="{{ filtros.get('q') or filtros.get('ci', '') }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ne">NE</label>
+                        <input
+                            type="text"
+                            id="ne"
+                            name="ne"
+                            placeholder="Ex.: 25"
+                            value="{{ filtros.get('ne', '') }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="exercicio">Exercicio</label>
+                        <input type="month" id="exercicio" name="exercicio" value="{{ filtros.get('exercicio', '') }}">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="responsavel">Responsavel</label>
+                        <select id="responsavel" name="responsavel">
+                            <option value="meus" {% if filtro_responsavel == 'meus' %}selected{% endif %}>So os meus</option>
+                            <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                            {% for usuario in usuarios %}
+                                <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>
+                                    {{ usuario.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="situacao_rpv_id">Situacao do RPV</label>
+                        <select id="situacao_rpv_id" name="situacao_rpv_id">
+                            <option value="">Todas</option>
+                            {% for situacao in situacoes_rpv %}
+                                <option value="{{ situacao.id }}" {% if filtros.get('situacao_rpv_id') == situacao.id|string %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-inline" for="mostrar_encerrados">
+                            <input
+                                type="checkbox"
+                                id="mostrar_encerrados"
+                                name="mostrar_encerrados"
+                                value="1"
+                                {% if mostrar_encerrados %}checked{% endif %}
+                            >
+                            <span>Incluir concluídos e cancelados</span>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <button type="submit">Filtrar</button>
+                    </div>
+
+                    <div class="form-group">
+                        <a class="btn btn-secondary" href="{{ url_for('dativos.lotes_sem_irrf', sem_favorito=1) }}">Limpar</a>
+                    </div>
+                </div>
+            </form>
+
+            {% set saved_filter_scope = 'dativos_lotes' %}
+            {% set saved_filter_form_id = 'dativos-lotes-filter-form' %}
+            {% set saved_filter_base_url = url_for('dativos.lotes_sem_irrf') %}
+            {% set saved_filter_help = 'Salve recortes dos lotes sem IRRF para o trabalho em andamento do setor.' %}
+            {% set saved_filter_embedded = true %}
+            {% include "components/saved_filters_bar.html" %}
+        </div>
+    </details>
+</div>
+
+{% set processo_crosscheck_scope = 'dativos' %}
+{% set processo_crosscheck_grade_vazia = not lotes %}
+{% include "components/processo_crosscheck_card.html" %}
+
+<div class="list-card">
+    <div class="workbench-toolbar">
+        <div class="workbench-summary">
+            <div><strong>Responsavel:</strong>
+                {% if filtro_responsavel == 'meus' %}
+                    So os meus
+                {% elif filtro_responsavel and filtro_responsavel != 'todos' %}
+                    {% for usuario in usuarios %}
+                        {% if filtro_responsavel == usuario.id|string %}
+                            {{ usuario.nome }}
+                        {% endif %}
+                    {% endfor %}
+                {% else %}
+                    Todos
+                {% endif %}
+            </div>
+            <div><strong>Visao:</strong> {% if mostrar_encerrados %}Todos os status{% else %}Fila ativa{% endif %}</div>
+            <div><strong>Total encontrado:</strong> {{ lotes|length }}</div>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table class="detail-table-lotes">
+            <thead>
+                <tr>
+                    <th class="col-exercicio">Competencia</th>
+                    <th class="col-resumo">Resumo operacional</th>
+                    <th class="col-valor">Valor bruto</th>
+                    <th class="col-valor">IRRF total</th>
+                    <th class="col-valor">Liquido total</th>
+                    <th class="col-curta">NE</th>
+                    <th class="col-curta">OB</th>
+                    <th class="col-status">Situacao do RPV</th>
+                    <th class="col-status">Situacao do IRRF</th>
+                    <th class="col-acoes">Acoes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for lote in lotes %}
+                <form id="quick-form-{{ lote.id }}" method="POST" action="{{ url_for('dativos.atualizacao_rapida_lote', lote_id=lote.id, **filtros.to_dict()) }}">{{ csrf_input() }}</form>
+                <tr>
+                    <td>{{ lote.competencia_operacional }}</td>
+
+                    <td>
+                        <div class="resumo-box">{{ lote.resumo_operacional }}</div>
+                        <div class="summary-meta-row">
+                            <span class="summary-meta-pill">
+                                Responsavel: {{ lote.responsavel.nome if lote.responsavel else 'Nao informado' }}
+                            </span>
+                            {% if lote.numero_se %}
+                                <span class="summary-meta-pill">
+                                    SE: {{ lote.numero_se }}
+                                </span>
+                            {% endif %}
+                        </div>
+                    </td>
+
+                    <td>R$ {{ lote.valor_total_bruto|moeda_br }}</td>
+                    <td>R$ {{ lote.valor_total_irrf|moeda_br }}</td>
+                    <td>R$ {{ lote.valor_total_liquido|moeda_br }}</td>
+
+                    <td>
+                        <input class="inline-input" type="text" name="nota_empenho" value="{{ lote.nota_empenho or '' }}" title="NE compartilhada apenas dentro deste lote sem IRRF." form="quick-form-{{ lote.id }}">
+                    </td>
+
+                    <td>
+                        <input class="inline-input" type="text" name="ordem_bancaria" value="{{ lote.ordem_bancaria or '' }}" title="OB compartilhada apenas dentro deste lote sem IRRF." form="quick-form-{{ lote.id }}">
+                    </td>
+
+                    <td>
+                        <select class="status-select {{ lote.situacao_rpv.cor_badge or 'badge-slate' }}" name="situacao_rpv_id" form="quick-form-{{ lote.id }}">
+                            {% for situacao in situacoes_rpv %}
+                                <option value="{{ situacao.id }}" {% if lote.situacao_rpv_id == situacao.id %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </td>
+
+                    <td>
+                        <span class="group-pill group-lote">Sem IRRF</span>
+                    </td>
+
+                    <td>
+                        <div class="actions-inline">
+                            <button type="submit" class="btn btn-sm" form="quick-form-{{ lote.id }}">Salvar</button>
+                            <a class="btn btn-secondary btn-sm" href="{{ url_for('dativos.detalhe_lote_sem_irrf', lote_id=lote.id, retorno=url_retorno_atual) }}">Abrir</a>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="10">Nenhum lote sem IRRF encontrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

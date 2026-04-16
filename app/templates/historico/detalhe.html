@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Historico de alteracoes{% endblock %}
+{% block topbar_title %}Historico{% endblock %}
+{% block topbar_subtitle %}Rastreabilidade operacional do registro{% endblock %}
+
+{% macro variant_label(variant) -%}
+    {%- if variant == 'danger' -%}
+        Critico
+    {%- elif variant == 'warning' -%}
+        Sensivel
+    {%- elif variant == 'success' -%}
+        Controle
+    {%- else -%}
+        Registro
+    {%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Historico de alteracoes</h1>
+        <p class="muted">Veja quem alterou este registro, quando aconteceu e quais campos foram impactados.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ contexto.retorno_url }}">{{ contexto.retorno_label }}</a>
+    </div>
+</div>
+
+<div class="section-card history-overview">
+    <div class="summary-grid">
+        <div class="readonly-box">
+            <strong>Tipo</strong><br>
+            {{ contexto.label }}
+        </div>
+        <div class="readonly-box">
+            <strong>Registro</strong><br>
+            {{ contexto.titulo }}
+        </div>
+        <div class="readonly-box">
+            <strong>Eventos</strong><br>
+            {{ historico|length }}
+        </div>
+        <div class="readonly-box">
+            <strong>Ultima alteracao</strong><br>
+            {% if historico %}
+                {{ historico[0].criado_em.strftime('%d/%m/%Y as %H:%M') if historico[0].criado_em else '-' }}
+            {% else %}
+                Ainda nao registrado
+            {% endif %}
+        </div>
+        <div class="readonly-box full-width">
+            <strong>Referencia</strong><br>
+            {{ contexto.subtitulo }}
+        </div>
+    </div>
+</div>
+
+{% if history_groups %}
+    <div class="history-timeline" aria-label="Linha do tempo do historico">
+        {% for group in history_groups %}
+            <section class="history-day-group" aria-label="{{ group.label }}">
+                <div class="history-day-label">{{ group.label }}</div>
+
+                <div class="history-day-events">
+                    {% for item in group.events %}
+                        {% set evento = item.evento %}
+                        <article class="history-event history-event-{{ item.variant }}">
+                            <div class="history-event-marker" aria-hidden="true"></div>
+
+                            <div class="history-event-body">
+                                <div class="history-event-head">
+                                    <div class="history-event-main">
+                                        <div class="history-event-meta">
+                                            <time datetime="{{ evento.criado_em.isoformat() if evento.criado_em else '' }}">
+                                                {{ item.date_label }} as {{ item.time_label }}
+                                            </time>
+                                            <span>{{ item.actor }}</span>
+                                        </div>
+                                        <h2 class="history-event-title">{{ evento.acao }}</h2>
+                                        <p class="history-event-summary">{{ item.summary }}</p>
+                                    </div>
+
+                                    <div class="history-event-badges">
+                                        <span class="history-badge history-badge-{{ item.variant }}">
+                                            {{ variant_label(item.variant) }}
+                                        </span>
+                                        <span class="history-badge">
+                                            {{ item.alteracoes|length }} mudanca(s)
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {% if item.alteracoes %}
+                                    <details class="history-details" {% if item.is_critical or loop.first %}open{% endif %}>
+                                        <summary class="history-details-summary">
+                                            Ver campos alterados
+                                        </summary>
+
+                                        <div class="history-change-list">
+                                            {% for alteracao in item.alteracoes %}
+                                                <div class="history-change {% if alteracao.critica %}is-critical{% endif %}">
+                                                    <div class="history-change-title">
+                                                        <strong>{{ alteracao.rotulo }}</strong>
+                                                        {% if alteracao.critica %}
+                                                            <span class="history-badge history-badge-warning">Sensivel</span>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="history-change-values">
+                                                        <div class="history-value history-value-before">
+                                                            <span>Antes</span>
+                                                            <strong>{{ alteracao.antes }}</strong>
+                                                        </div>
+                                                        <div class="history-value-arrow" aria-hidden="true">-></div>
+                                                        <div class="history-value history-value-after">
+                                                            <span>Depois</span>
+                                                            <strong>{{ alteracao.depois }}</strong>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                    </details>
+                                {% else %}
+                                    <p class="history-empty-detail">
+                                        Evento de controle registrado. Nenhum campo rastreado foi alterado.
+                                    </p>
+                                {% endif %}
+                            </div>
+                        </article>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="section-card">
+        <p class="muted">Ainda nao ha eventos registrados para este item.</p>
+    </div>
+{% endif %}
+{% endblock %}

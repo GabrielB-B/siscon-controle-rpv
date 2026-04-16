@@ -1,0 +1,1183 @@
+{% extends "base.html" %}
+
+{% block title %}BI - SISCON{% endblock %}
+{% block topbar_title %}BI{% endblock %}
+{% block topbar_subtitle %}Cota, tendencia mensal e leitura operacional{% endblock %}
+
+{% block content %}
+{% set filtros_abertos = filtros.q or filtros.competencia_inicial or filtros.competencia_final or filtros.origem != 'todos' or filtros.grupo_cota != 'todos' or filtros.tipo or filtros.reinf != 'todos' or filtros.responsavel != 'todos' or (visao_bi != 'conferencia' and filtros.pagamento != 'todos') or (visao_bi != 'conferencia' and filtros.janela_meses != '6') %}
+{% set destaque_cards = cards[:6] %}
+{% set beneficiarios_destacados = top_beneficiarios_fluxo[:5] %}
+{% set beneficiarios_ocultos = top_beneficiarios_fluxo[5:] %}
+{% import "components/value_display.html" as values %}
+
+<div class="dashboard-shell">
+    <div class="page-header">
+        <div>
+            <h1>{% if visao_bi == 'conferencia' %}BI de conferencia{% else %}BI operacional{% endif %}</h1>
+            <p class="muted">
+                {% if visao_bi == 'conferencia' %}
+                    Painel contabil por pagamento efetivo, com conferencia mensal limpa para bater bruto, IRRF e liquido sem misturar carteira futura com gasto realizado.
+                {% else %}
+                    Painel analitico mais limpo para enxergar gasto mensal, grupos prioritarios, retencao fiscal e carteira operacional sem competir com excesso de card.
+                {% endif %}
+            </p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost" href="{{ url_for('dashboard.index') }}">Voltar para a home</a>
+            <a class="btn" href="{{ export_url }}">Exportar CSV</a>
+        </div>
+    </div>
+
+    <section class="filters-card">
+        <details class="filters-toggle" data-filter-panel="bi" {% if filtros_abertos %}open{% endif %}>
+            <summary>
+                <span>Filtros de pesquisa</span>
+                <span class="arrow">&#9662;</span>
+            </summary>
+
+            <div class="filters-body">
+                <form method="GET" class="bi-filter-grid" id="bi-filter-form">
+                    <input type="hidden" name="visao" value="{{ visao_bi }}">
+                    <div class="form-group">
+                        <label for="q">Busca</label>
+                        <input
+                            type="text"
+                            id="q"
+                            name="q"
+                            value="{{ filtros.q }}"
+                            placeholder="Beneficiario, documento, processo ou C.I."
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="competencia_inicial">Competencia inicial</label>
+                        <input
+                            type="month"
+                            id="competencia_inicial"
+                            name="competencia_inicial"
+                            value="{{ filtros.competencia_inicial }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="competencia_final">Competencia final</label>
+                        <input
+                            type="month"
+                            id="competencia_final"
+                            name="competencia_final"
+                            value="{{ filtros.competencia_final }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="responsavel">Responsavel</label>
+                        <select id="responsavel" name="responsavel">
+                            <option value="todos" {% if filtros.responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                            <option value="meus" {% if filtros.responsavel == 'meus' %}selected{% endif %}>So os meus</option>
+                            {% for usuario in usuarios %}
+                                <option value="{{ usuario.id }}" {% if filtros.responsavel == usuario.id|string %}selected{% endif %}>
+                                    {{ usuario.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    {% if visao_bi == 'conferencia' %}
+                        <input type="hidden" name="pagamento" value="pagos">
+                    {% else %}
+                        <div class="form-group">
+                            <label for="pagamento">Situacao de pagamento</label>
+                            <select id="pagamento" name="pagamento">
+                                {% for chave, label in pagamento_opcoes.items() %}
+                                    <option value="{{ chave }}" {% if filtros.pagamento == chave %}selected{% endif %}>
+                                        {{ label }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    {% endif %}
+
+                    <div class="form-group">
+                        <label for="origem">Origem</label>
+                        <select id="origem" name="origem">
+                            {% for chave, label in origem_opcoes.items() %}
+                                <option value="{{ chave }}" {% if filtros.origem == chave %}selected{% endif %}>
+                                    {{ label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="grupo_cota">Grupo de cota</label>
+                        <select id="grupo_cota" name="grupo_cota">
+                            {% for chave, label in grupo_cota_opcoes.items() %}
+                                <option value="{{ chave }}" {% if filtros.grupo_cota == chave %}selected{% endif %}>
+                                    {{ label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tipo">Tipo</label>
+                        <select id="tipo" name="tipo">
+                            <option value="">Todos</option>
+                            {% for tipo in tipo_opcoes %}
+                                <option value="{{ tipo }}" {% if filtros.tipo == tipo %}selected{% endif %}>
+                                    {{ tipo }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="reinf">REINF</label>
+                        <select id="reinf" name="reinf">
+                            <option value="todos" {% if filtros.reinf == 'todos' %}selected{% endif %}>Todos</option>
+                            <option value="pendente" {% if filtros.reinf == 'pendente' %}selected{% endif %}>Pendente</option>
+                            <option value="concluido" {% if filtros.reinf == 'concluido' %}selected{% endif %}>Concluido</option>
+                            <option value="cancelado" {% if filtros.reinf == 'cancelado' %}selected{% endif %}>Cancelado</option>
+                            <option value="nao_aplicavel" {% if filtros.reinf == 'nao_aplicavel' %}selected{% endif %}>Nao se aplica</option>
+                        </select>
+                    </div>
+
+                    {% if visao_bi != 'conferencia' %}
+                        <div class="form-group">
+                            <label for="janela_meses">Janela dos graficos</label>
+                            <select id="janela_meses" name="janela_meses">
+                                {% for quantidade, label in janela_opcoes.items() %}
+                                    <option value="{{ quantidade }}" {% if filtros.janela_meses == quantidade|string %}selected{% endif %}>
+                                        {{ label }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    {% endif %}
+
+                    <div class="bi-filter-actions">
+                        <button type="submit">Aplicar filtros</button>
+                        <a class="btn btn-ghost" href="{{ url_for('dashboard.bi', sem_favorito=1, visao=visao_bi) }}">Limpar</a>
+                    </div>
+                </form>
+
+                {% set saved_filter_scope = 'bi' %}
+                {% set saved_filter_form_id = 'bi-filter-form' %}
+                {% set saved_filter_base_url = url_for('dashboard.bi') %}
+                {% set saved_filter_help = 'Guarde recortes do BI para comparar competencia, grupo de cota, responsavel e leitura fiscal.' %}
+                {% set saved_filter_embedded = true %}
+                {% include "components/saved_filters_bar.html" %}
+            </div>
+        </details>
+    </section>
+
+    <section class="bi-summary-strip">
+        <article class="card bi-summary-card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Recorte aplicado</p>
+                    <h2>Leitura principal do BI</h2>
+                    <p class="section-caption">
+                        {% if visao_bi == 'conferencia' %}
+                            Leitura curta do recorte contabil filtrado, com foco em pagamento efetivo, origem do gasto e escopo fiscal.
+                        {% else %}
+                            Os graficos seguem primeiro, mas o BI agora deixa mais claro o que saiu, o que esta em carteira e o que ainda pede tratamento fiscal.
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <div class="bi-summary-pills">
+                <div class="bi-summary-pill">
+                    <strong>{% if visao_bi == 'conferencia' %}Pagamentos filtrados{% else %}Total encontrado{% endif %}</strong>
+                    <span>{{ total_linhas }} linha(s)</span>
+                </div>
+                <div class="bi-summary-pill">
+                    <strong>Origem</strong>
+                    <span>{{ origem_opcoes.get(filtros.origem, 'Todas as origens') }}</span>
+                </div>
+                <div class="bi-summary-pill">
+                    <strong>Grupo</strong>
+                    <span>{{ grupo_cota_opcoes.get(filtros.grupo_cota, 'Todos os grupos') }}</span>
+                </div>
+                <div class="bi-summary-pill">
+                    <strong>Visao</strong>
+                    <span>{{ visao_opcoes.get(visao_bi, 'Operacional') }}</span>
+                </div>
+                {% if visao_bi == 'conferencia' %}
+                    <div class="bi-summary-pill">
+                        <strong>Periodo pago</strong>
+                        <span>{{ conferencia_bi.periodo_label if conferencia_bi.tem_dados else 'Sem pagamentos' }}</span>
+                    </div>
+                    <div class="bi-summary-pill">
+                        <strong>Base do recorte</strong>
+                        <span>{{ conferencia_bi.competencia_base }}</span>
+                    </div>
+                {% else %}
+                    <div class="bi-summary-pill">
+                        <strong>Mes pago ref.</strong>
+                        <span>{{ resumo_grupos.competencia_legivel }}</span>
+                    </div>
+                    <div class="bi-summary-pill">
+                        <strong>Projecao seguinte</strong>
+                        <span>{{ resumo_grupos.proxima_competencia_legivel }}</span>
+                    </div>
+                {% endif %}
+                <div class="bi-summary-pill">
+                    <strong>Responsavel</strong>
+                    <span>
+                        {% if filtros.responsavel == 'meus' %}
+                            So os meus
+                        {% elif filtros.responsavel and filtros.responsavel != 'todos' %}
+                            {% for usuario in usuarios %}
+                                {% if filtros.responsavel == usuario.id|string %}
+                                    {{ usuario.nome }}
+                                {% endif %}
+                            {% endfor %}
+                        {% else %}
+                            Todos
+                        {% endif %}
+                    </span>
+                </div>
+                {% if visao_bi == 'conferencia' %}
+                    <div class="bi-summary-pill">
+                        <strong>REINF</strong>
+                        <span>
+                            {% if filtros.reinf == 'todos' %}
+                                Todos
+                            {% elif filtros.reinf == 'pendente' %}
+                                Pendente
+                            {% elif filtros.reinf == 'concluido' %}
+                                Concluido
+                            {% elif filtros.reinf == 'cancelado' %}
+                                Cancelado
+                            {% elif filtros.reinf == 'nao_aplicavel' %}
+                                Nao se aplica
+                            {% else %}
+                                {{ filtros.reinf }}
+                            {% endif %}
+                        </span>
+                    </div>
+                {% else %}
+                    <div class="bi-summary-pill">
+                        <strong>Janela grafica</strong>
+                        <span>{{ janela_opcoes.get(janela_meses, janela_meses ~ ' meses') }}</span>
+                    </div>
+                {% endif %}
+            </div>
+        </article>
+
+        <article class="card bi-summary-card bi-summary-card-accent">
+            <div class="section-heading">
+                <div>
+                    {% if visao_bi == 'conferencia' %}
+                        <p class="section-kicker">Conferencia do recorte</p>
+                        <h2>{{ conferencia_bi.competencia_base }}</h2>
+                        <p class="section-caption">
+                            Resumo objetivo para validar a leitura contabil: quantidade paga, bruto pago, imposto retido e liquido efetivo do recorte.
+                        </p>
+                    {% else %}
+                        <p class="section-kicker">Resumo do ciclo</p>
+                        <h2>{{ resumo_grupos.competencia_legivel }}</h2>
+                        <p class="section-caption">
+                            Visao curta para cota e conversa operacional do mes sem excesso de cards paralelos.
+                        </p>
+                    {% endif %}
+                </div>
+                <span class="pill">
+                    {% if visao_bi == 'conferencia' %}
+                        {{ conferencia_bi.total_competencias }} competencia(s)
+                    {% else %}
+                        {{ resumo_grupos.ano_referencia }}
+                    {% endif %}
+                </span>
+            </div>
+
+            <div class="bi-inline-kpis bi-summary-cycle-grid">
+                {% if visao_bi == 'conferencia' %}
+                    <article class="bi-mini-stat">
+                        <span>Pagamentos no recorte</span>
+                        <strong>{{ values.render_value(conferencia_bi.totais.quantidade, 'numero', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>Valor bruto pago</span>
+                        <strong>{{ values.render_value(conferencia_bi.totais.valor_bruto, 'moeda', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>IRRF total</span>
+                        <strong>{{ values.render_value(conferencia_bi.totais.valor_irrf, 'moeda', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>Valor liquido total</span>
+                        <strong>{{ values.render_value(conferencia_bi.totais.valor_liquido, 'moeda', 'inline') }}</strong>
+                    </article>
+                {% else %}
+                    <article class="bi-mini-stat">
+                        <span>Pago no mes</span>
+                        <strong>{{ values.render_value(resumo_grupos.total_mes_pago, 'moeda', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>Pago no ano</span>
+                        <strong>{{ values.render_value(resumo_grupos.total_ano_pago, 'moeda', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>Carteira em aberto</span>
+                        <strong>{{ values.render_value(resumo_grupos.total_em_aberto, 'moeda', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>Projecao seguinte</span>
+                        <strong>{{ values.render_value(resumo_grupos.total_previsao, 'moeda', 'inline') }}</strong>
+                    </article>
+                {% endif %}
+            </div>
+        </article>
+    </section>
+
+    <section class="card bi-view-card">
+        <div class="bi-view-switch">
+            <div>
+                <p class="section-kicker">Modo do BI</p>
+                <h2>Escolha a leitura</h2>
+                <p class="section-caption">
+                    `Operacional` para gestao do fluxo. `Conferencia` para leitura contabil por pagamento efetivo, totais mensais e soma geral sem poluir a visao principal.
+                </p>
+            </div>
+            <div class="bi-view-actions">
+                {% for chave, label in visao_opcoes.items() %}
+                    <a class="btn {% if visao_bi == chave %}btn-secondary{% else %}btn-ghost{% endif %}" href="{{ visao_urls[chave] }}">
+                        {{ label }}
+                    </a>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    {% if visao_bi == 'conferencia' %}
+        <section class="panel-grid bi-focus-grid">
+            <article class="card">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-kicker">Validacao</p>
+                        <h2>Conferencia mensal por competencia de pagamento</h2>
+                        <p class="section-caption">
+                            Esta visao usa a competencia de pagamento como eixo principal e o bruto pago como referencia oficial para bater com a leitura contabil do setor, sempre fora dos cancelados.
+                        </p>
+                    </div>
+                    <span class="pill">{{ conferencia_bi.competencia_base }}</span>
+                </div>
+
+                <div class="bi-inline-kpis bi-budget-kpi-grid">
+                    {% for grupo in conferencia_bi.grupos %}
+                        <article class="bi-mini-stat">
+                            <span>{{ grupo.label }}</span>
+                            <strong>{{ values.render_value(grupo.valor_total, 'moeda', 'inline') }}</strong>
+                            <div class="progress-meta">{{ '%.1f'|format(grupo.percentual) }}% do bruto total</div>
+                        </article>
+                    {% endfor %}
+                </div>
+
+                <ul class="helper-list bi-helper-list">
+                    <li>
+                        <strong>Como validar</strong>
+                        Compare primeiro a coluna `Bruto pago do mes` por competencia e depois a linha `Total geral`. As colunas `Pessoal`, `Pericial` e `Comum` ajudam a localizar qualquer diferenca sem misturar com a visao operacional.
+                    </li>
+                    <li>
+                        <strong>Leitura mensal</strong>
+                        Cada linha mostra o bruto pago, o IRRF retido e o liquido pago com base exclusiva na competencia de pagamento.
+                    </li>
+                    <li>
+                        <strong>Regra mae</strong>
+                        Nesta visao, pagamento efetivo vence cadastro. Se o registro foi pago em janeiro, ele entra em `jan/2026` mesmo que tenha sido cadastrado em outro mes.
+                    </li>
+                    <li>
+                        <strong>Conferencia fiscal detalhada</strong>
+                        A leitura mensal e anual por beneficiario agora fica concentrada na area `REINF`, mantendo este BI enxuto so para a batida contabil por competencia.
+                    </li>
+                </ul>
+            </article>
+
+        </section>
+
+        <section class="card">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-kicker">Resumo mensal</p>
+                        <h2>Bruto pago, IRRF e liquido por mes</h2>
+                        <p class="section-caption">
+                            Leitura direta por competencia de pagamento, sem separar por tipo, para bater rapidamente com a planilha contabil antes da conferencia detalhada.
+                        </p>
+                    </div>
+                </div>
+
+            {% if conferencia_bi.tem_dados %}
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Comp. pagamento</th>
+                                <th>Bruto pago do mes</th>
+                                <th>IRRF do mes</th>
+                                <th>Liquido do mes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for linha in conferencia_bi.linhas %}
+                                <tr>
+                                    <td>{{ linha.label }}</td>
+                                    <td>{{ values.render_value(linha.valor_bruto, 'moeda', 'compact') }}</td>
+                                    <td>{{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</td>
+                                    <td>{{ values.render_value(linha.valor_liquido, 'moeda', 'compact') }}</td>
+                                </tr>
+                            {% endfor %}
+                            <tr class="table-total-row">
+                                <td><strong>Total geral</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_bruto, 'moeda', 'compact') }}</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_irrf, 'moeda', 'compact') }}</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_liquido, 'moeda', 'compact') }}</strong></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+        </section>
+
+        <section class="card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Documentos pendentes</p>
+                    <h2>Conferencia dos cadastros fora do fluxo oficial</h2>
+                    <p class="section-caption">
+                        Estes valores ficam separados da batida de pagamentos. Eles ajudam a conferir o que ainda depende de CPF/CNPJ antes de entrar no fluxo normal.
+                    </p>
+                </div>
+            </div>
+
+            <div class="bi-inline-kpis bi-summary-cycle-grid">
+                <article class="bi-mini-stat">
+                    <span>Pendencias abertas</span>
+                    <strong>{{ values.render_value(conferencia_pendencias_documentais.total_quantidade, 'numero', 'inline') }}</strong>
+                </article>
+                <article class="bi-mini-stat">
+                    <span>Valor em revisao</span>
+                    <strong>{{ values.render_value(conferencia_pendencias_documentais.total_valor, 'moeda', 'inline') }}</strong>
+                </article>
+                <article class="bi-mini-stat">
+                    <span>Sem documento</span>
+                    <strong>{{ values.render_value(conferencia_pendencias_documentais.total_sem_documento, 'numero', 'inline') }}</strong>
+                </article>
+            </div>
+
+            {% if conferencia_pendencias_documentais.tem_dados %}
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Competencia</th>
+                                <th>Beneficiario</th>
+                                <th>Documento</th>
+                                <th>C.I.</th>
+                                <th>Processo</th>
+                                <th>Responsavel</th>
+                                <th>Valor</th>
+                                <th>Abrir</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for linha in conferencia_pendencias_documentais.linhas %}
+                                <tr>
+                                    <td>{{ linha.competencia_legivel }}</td>
+                                    <td>
+                                        <strong>{{ linha.beneficiario }}</strong><br>
+                                        <span class="stack-meta">{{ linha.tipo }}</span>
+                                    </td>
+                                    <td>
+                                        {{ linha.documento }}<br>
+                                        <span class="stack-meta">{{ linha.documento_status }}</span>
+                                    </td>
+                                    <td>{{ linha.ci }}</td>
+                                    <td>{{ linha.processo }}</td>
+                                    <td>{{ linha.responsavel }}</td>
+                                    <td>{{ values.render_value(linha.valor_bruto, 'moeda', 'compact') }}</td>
+                                    <td><a class="btn btn-secondary btn-sm" href="{{ linha.url }}">Abrir</a></td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    Nenhum documento pendente aberto apareceu neste recorte.
+                </div>
+            {% endif %}
+        </section>
+
+        <section class="card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Tabela de conferencia</p>
+                    <h2>Totais mensais e total geral</h2>
+                    <p class="section-caption">
+                        Estrutura pensada para soma manual ou confronto direto com planilha, sem depender de graficos.
+                    </p>
+                </div>
+            </div>
+
+            {% if conferencia_bi.tem_dados %}
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Comp. pagamento</th>
+                                <th>Registros</th>
+                                <th>Pessoal</th>
+                                <th>Pericial</th>
+                                <th>Comum</th>
+                                <th>Bruto pago do mes</th>
+                                <th>IRRF do mes</th>
+                                <th>Liquido do mes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for linha in conferencia_bi.linhas %}
+                                <tr>
+                                    <td>{{ linha.label }}</td>
+                                    <td>{{ values.render_value(linha.quantidade, 'numero', 'compact') }}</td>
+                                    <td>{{ values.render_value(linha.valor_pessoal, 'moeda', 'compact') }}</td>
+                                    <td>{{ values.render_value(linha.valor_pericial, 'moeda', 'compact') }}</td>
+                                    <td>{{ values.render_value(linha.valor_comum, 'moeda', 'compact') }}</td>
+                                    <td>{{ values.render_value(linha.valor_bruto, 'moeda', 'compact') }}</td>
+                                    <td>{{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</td>
+                                    <td>{{ values.render_value(linha.valor_liquido, 'moeda', 'compact') }}</td>
+                                </tr>
+                            {% endfor %}
+                            <tr class="table-total-row">
+                                <td><strong>Total geral</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.quantidade, 'numero', 'compact') }}</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_pessoal, 'moeda', 'compact') }}</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_pericial, 'moeda', 'compact') }}</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_comum, 'moeda', 'compact') }}</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_bruto, 'moeda', 'compact') }}</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_irrf, 'moeda', 'compact') }}</strong></td>
+                                <td><strong>{{ values.render_value(conferencia_bi.totais.valor_liquido, 'moeda', 'compact') }}</strong></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    Nenhum pagamento efetivo encontrou esse conjunto de filtros para a conferencia.
+                </div>
+            {% endif %}
+        </section>
+    {% else %}
+
+    <section class="card bi-window-card">
+        <div class="bi-window-switch">
+            <div>
+                <p class="section-kicker">Visualizacao</p>
+                <h2>Janela modular dos graficos</h2>
+                <p class="section-caption">
+                    Altere entre 6 e 12 meses sem perder os demais filtros do recorte atual.
+                </p>
+            </div>
+            <div class="bi-window-actions">
+                {% for quantidade, label in janela_opcoes.items() %}
+                    <a class="btn {% if janela_meses == quantidade %}btn-secondary{% else %}btn-ghost{% endif %}" href="{{ janela_urls[quantidade] }}">
+                        {{ label }}
+                    </a>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <section class="bi-group-grid">
+        {% for grupo in series_grupos_cota %}
+            <article class="card bi-group-card">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-kicker">Grupo prioritario</p>
+                        <h2>{{ grupo.label }}</h2>
+                        <p class="section-caption">
+                            {{ grupo.descricao }} com leitura mensal separada para apoiar cota, comparacao e conversa executiva do setor.
+                        </p>
+                    </div>
+                    <span class="pill">{{ janela_opcoes.get(janela_meses, janela_meses ~ ' meses') }}</span>
+                </div>
+
+                <div class="bi-inline-kpis bi-budget-kpi-grid">
+                    <article class="bi-mini-stat">
+                        <span>Pago em {{ resumo_grupos.competencia_legivel }}</span>
+                        <strong>{{ values.render_value(grupo.valor_mes_pago, 'moeda', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>Total na janela</span>
+                        <strong>{{ values.render_value(grupo.valor_total_janela, 'moeda', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>Pago em {{ resumo_grupos.ano_referencia }}</span>
+                        <strong>{{ values.render_value(grupo.valor_ano_pago, 'moeda', 'inline') }}</strong>
+                    </article>
+                    <article class="bi-mini-stat">
+                        <span>Em aberto</span>
+                        <strong>{{ values.render_value(grupo.valor_em_aberto, 'moeda', 'inline') }}</strong>
+                    </article>
+                </div>
+
+                {% if grupo.tem_dados %}
+                    <div class="chart-columns bi-month-columns">
+                        {% for item in grupo.serie %}
+                            <div class="chart-column">
+                                <div class="chart-column-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                                <div class="chart-column-track">
+                                    <div class="chart-column-bar {{ grupo.chart_class }}" style="height: {{ item.percentual }}%;"></div>
+                                </div>
+                                <div class="chart-column-label">{{ item.label }}</div>
+                                <div class="chart-column-meta">{{ item.quantidade }} pagamento(s)</div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="empty-state">
+                        Nao houve pagamentos suficientes para montar a serie mensal de {{ grupo.label|lower }} no recorte atual.
+                    </div>
+                {% endif %}
+
+                <div class="bi-group-footer">
+                    <span>Participacao no mes: {{ '%.1f'|format(grupo.percentual_pago_mes) }}%</span>
+                    <span>Melhor mes da janela: {{ grupo.melhor_mes_label }} com {{ values.render_value(grupo.melhor_mes_valor, 'moeda', 'compact') }}</span>
+                    <span>{{ grupo.quantidade_total_janela }} pagamento(s) na janela</span>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+
+    <section class="panel-grid bi-focus-grid">
+        <article class="card bi-spotlight-card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">IRRF</p>
+                    <h2>IRRF retido por mes</h2>
+                    <p class="section-caption">
+                        Serie mensal do imposto retido apenas sobre pagamentos realizados, separada do volume bruto para nao esconder a leitura fiscal.
+                    </p>
+                </div>
+                <span class="pill">{{ janela_opcoes.get(janela_meses, janela_meses ~ ' meses') }}</span>
+            </div>
+
+            {% if resumo_irrf.tem_dados %}
+                <div class="chart-columns bi-month-columns">
+                    {% for item in resumo_irrf.serie %}
+                        <div class="chart-column">
+                            <div class="chart-column-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                            <div class="chart-column-track">
+                                <div class="chart-column-bar chart-column-bar-amber" style="height: {{ item.percentual }}%;"></div>
+                            </div>
+                            <div class="chart-column-label">{{ item.label }}</div>
+                            <div class="chart-column-meta">{{ item.quantidade }} retencao(oes)</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    Nao houve pagamentos com IRRF suficiente para montar a serie mensal do recorte.
+                </div>
+            {% endif %}
+        </article>
+
+        <article class="card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Leitura fiscal</p>
+                    <h2>Leitura executiva do IRRF</h2>
+                    <p class="section-caption">
+                        Quadro enxuto para acompanhar o retido no mes, o acumulado e o tamanho da base fiscal tratada.
+                    </p>
+                </div>
+                <span class="pill">{{ resumo_irrf.competencia_legivel }}</span>
+            </div>
+
+            <div class="bi-inline-kpis bi-summary-cycle-grid">
+                <article class="bi-mini-stat">
+                    <span>IRRF em {{ resumo_irrf.competencia_legivel }}</span>
+                    <strong>{{ values.render_value(resumo_irrf.irrf_mes, 'moeda', 'inline') }}</strong>
+                </article>
+                <article class="bi-mini-stat">
+                    <span>Acumulado no recorte</span>
+                    <strong>{{ values.render_value(resumo_irrf.acumulado_recorte, 'moeda', 'inline') }}</strong>
+                </article>
+                <article class="bi-mini-stat">
+                    <span>Acumulado em {{ resumo_irrf.competencia_referencia[:4] }}</span>
+                    <strong>{{ values.render_value(resumo_irrf.acumulado_ano, 'moeda', 'inline') }}</strong>
+                </article>
+                <article class="bi-mini-stat">
+                    <span>Pagamentos com IRRF</span>
+                    <strong>{{ values.render_value(resumo_irrf.pagamentos_com_irrf, 'numero', 'inline') }}</strong>
+                </article>
+            </div>
+
+            <div class="progress-list">
+                <div class="progress-item">
+                    <div class="progress-item-head">
+                        <span>Beneficiarios com retencao</span>
+                        <div class="progress-item-value">{{ values.render_value(resumo_irrf.beneficiarios_unicos, 'numero', 'compact') }}</div>
+                    </div>
+                    <div class="progress-meta">Total unico de beneficiarios pagos com IRRF no recorte.</div>
+                </div>
+                <div class="progress-item">
+                    <div class="progress-item-head">
+                        <span>Media mensal na janela</span>
+                        <div class="progress-item-value">{{ values.render_value(resumo_irrf.media_mensal, 'moeda', 'compact') }}</div>
+                    </div>
+                    <div class="progress-meta">Media simples da retencao mensal dentro da janela grafica selecionada.</div>
+                </div>
+            </div>
+        </article>
+    </section>
+
+    <div class="section-heading bi-section-heading">
+        <div>
+            <p class="section-kicker">Complemento</p>
+            <h2>Indicadores complementares</h2>
+            <p class="section-caption">
+                Itens de apoio para leitura operacional, previsao e distribuicao do recorte atual.
+            </p>
+        </div>
+    </div>
+
+    <section class="metric-grid bi-primary-grid">
+        {% for card in destaque_cards %}
+            <article class="card metric-card bi-metric-card bi-primary-card">
+                <div class="metric-label">{{ card.label }}</div>
+                <div class="metric-value">{{ values.render_value(card.valor, card.tipo, 'metric') }}</div>
+                <div class="metric-note">{{ card.nota }}</div>
+            </article>
+        {% endfor %}
+    </section>
+
+    <section class="panel-grid bi-focus-grid">
+        <article class="card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Pendencias</p>
+                    <h2>O que ainda pede tratamento no recorte</h2>
+                    <p class="section-caption">
+                        Resumo direto da carteira em aberto e do fiscal pendente para nao depender so da leitura por cards.
+                    </p>
+                </div>
+            </div>
+
+            <div class="bi-inline-kpis bi-summary-cycle-grid">
+                {% for item in pendencias_bi.itens %}
+                    <article class="bi-mini-stat">
+                        <span>{{ item.label }}</span>
+                        <strong>{{ values.render_value(item.quantidade, 'numero', 'inline') }}</strong>
+                        <div class="progress-meta">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                    </article>
+                {% endfor %}
+            </div>
+
+            <div class="progress-list">
+                {% for item in pendencias_bi.itens %}
+                    <div class="progress-item">
+                        <div class="progress-item-head">
+                            <span>{{ item.label }}</span>
+                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                        </div>
+                        <div class="progress-meta">{{ item.nota }}</div>
+                    </div>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Comum</p>
+                    <h2>Dativos dentro do grupo comum</h2>
+                    <p class="section-caption">
+                        Leitura separada para mostrar quanto do grupo comum veio especificamente do fluxo de dativos.
+                    </p>
+                </div>
+                <span class="pill">{{ dativos_competencia.competencia_legivel }}</span>
+            </div>
+
+            <div class="bi-inline-kpis bi-summary-cycle-grid">
+                <article class="bi-mini-stat">
+                    <span>Total pago</span>
+                    <strong>{{ values.render_value(dativos_competencia.total_valor, 'moeda', 'inline') }}</strong>
+                </article>
+                <article class="bi-mini-stat">
+                    <span>Beneficiarios pagos</span>
+                    <strong>{{ values.render_value(dativos_competencia.total_quantidade, 'numero', 'inline') }}</strong>
+                </article>
+                {% for grupo in dativos_competencia.grupos %}
+                    <article class="bi-mini-stat">
+                        <span>{{ grupo.label }}</span>
+                        <strong>{{ values.render_value(grupo.valor_total, 'moeda', 'inline') }}</strong>
+                    </article>
+                {% endfor %}
+            </div>
+
+            {% if serie_dativos %}
+                <div class="stacked-month-grid">
+                    {% for item in serie_dativos %}
+                        <article class="stacked-month-card">
+                            <div class="stacked-month-head">
+                                <span>{{ item.label }}</span>
+                                <strong>{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</strong>
+                            </div>
+                            <div class="stacked-month-track">
+                                <div class="stacked-month-column" style="height: {{ item.altura_percentual }}%;">
+                                    {% for segmento in item.segmentos %}
+                                        {% if segmento.valor_total > 0 %}
+                                            <span
+                                                class="stacked-month-segment {{ segmento.css_class }}"
+                                                style="height: {{ segmento.percentual_interno }}%;"
+                                                title="{{ segmento.label }}: R$ {{ segmento.valor_total|moeda_br }}"
+                                            ></span>
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="stacked-month-meta">{{ item.quantidade_total }} pagamento(s)</div>
+                        </article>
+                    {% endfor %}
+                </div>
+
+                <div class="chart-legend">
+                    <span><span class="legend-dot stack-segment-soft"></span>Dativos sem IRRF</span>
+                    <span><span class="legend-dot stack-segment-strong"></span>Dativos com IRRF</span>
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    Nao houve pagamentos de dativos suficientes para montar a serie mensal do recorte.
+                </div>
+            {% endif %}
+        </article>
+    </section>
+
+    <section class="card">
+        <div class="section-heading">
+            <div>
+                <p class="section-kicker">Beneficiarios</p>
+                <h2>Top beneficiarios pagos com separacao fiscal</h2>
+                <p class="section-caption">
+                    Mostrando primeiro os maiores volumes do recorte. O detalhamento mensal fica recolhido para nao pesar a leitura.
+                </p>
+            </div>
+            <span class="pill">Top 5 do recorte</span>
+        </div>
+
+        {% if beneficiarios_destacados %}
+            <div class="bi-beneficiary-list bi-beneficiary-list-compact">
+                {% for item in beneficiarios_destacados %}
+                    <article class="bi-beneficiary-card">
+                        <div class="progress-item-head">
+                            <div>
+                                <strong>{{ item.label }}</strong>
+                                <div class="progress-meta">{{ item.documento }} | {{ item.quantidade }} registro(s)</div>
+                            </div>
+                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                        </div>
+
+                        <div class="progress-track">
+                            <div class="progress-bar progress-bar-secondary" style="width: {{ item.percentual }}%;"></div>
+                        </div>
+
+                        <div class="bi-beneficiary-splits">
+                            <span>Sem IRRF: {{ values.render_value(item.valor_sem_irrf, 'moeda', 'compact') }}</span>
+                            <span>Com IRRF: {{ values.render_value(item.valor_com_irrf, 'moeda', 'compact') }}</span>
+                            {% if item.valor_irrf_total > 0 %}
+                                <span>IRRF retido: {{ values.render_value(item.valor_irrf_total, 'moeda', 'compact') }}</span>
+                            {% endif %}
+                        </div>
+
+                        {% if item.competencias %}
+                            <details class="bi-beneficiary-details">
+                                <summary>Ver ultimas competencias</summary>
+                                <div class="bi-beneficiary-month-grid">
+                                    {% for competencia in item.competencias %}
+                                        <article class="bi-beneficiary-month-pill">
+                                            <strong>{{ competencia.label }}</strong>
+                                            <span>Total {{ values.render_value(competencia.valor_total, 'moeda', 'compact') }}</span>
+                                            <span>Sem IRRF {{ values.render_value(competencia.valor_sem_irrf, 'moeda', 'compact') }}</span>
+                                            <span>Com IRRF {{ values.render_value(competencia.valor_com_irrf, 'moeda', 'compact') }}</span>
+                                            {% if competencia.valor_irrf > 0 %}
+                                                <span>IRRF retido {{ values.render_value(competencia.valor_irrf, 'moeda', 'compact') }}</span>
+                                            {% endif %}
+                                        </article>
+                                    {% endfor %}
+                                </div>
+                            </details>
+                        {% endif %}
+                    </article>
+                {% endfor %}
+            </div>
+
+            <div class="bi-footnote">
+                Mostrando {{ beneficiarios_destacados|length }} beneficiario(s) com maior valor pago.
+                {% if beneficiarios_ocultos %}
+                    Outros {{ beneficiarios_ocultos|length }} continuam disponiveis no CSV e na base analitica.
+                {% endif %}
+            </div>
+        {% else %}
+            <div class="empty-state">
+                Nenhum beneficiario pago apareceu com o recorte aplicado.
+            </div>
+        {% endif %}
+    </section>
+
+    <section class="card bi-collapsible-card">
+        <details class="filters-toggle filters-toggle-soft">
+            <summary>
+                <span>Indicadores de apoio e distribuicao operacional</span>
+                <span class="arrow">&#9662;</span>
+            </summary>
+
+            <div class="filters-body">
+                <section class="panel-grid bi-support-grid">
+                    <article class="card">
+                        <div class="section-heading">
+                            <div>
+                                <p class="section-kicker">REINF</p>
+                                <h2>Status fiscal dos pagamentos realizados</h2>
+                            </div>
+                        </div>
+
+                        {% if valores_por_status_reinf %}
+                            <div class="progress-list">
+                                {% for item in valores_por_status_reinf %}
+                                    <div class="progress-item">
+                                        <div class="progress-item-head">
+                                            <span>{{ item.label }}</span>
+                                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                                        </div>
+                                        <div class="progress-track">
+                                            <div class="progress-bar progress-bar-secondary" style="width: {{ item.percentual }}%;"></div>
+                                        </div>
+                                        <div class="progress-meta">{{ item.quantidade }} registro(s)</div>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <div class="empty-state">
+                                Nao houve dados suficientes para agrupar o status da REINF neste recorte.
+                            </div>
+                        {% endif %}
+                    </article>
+
+                    <article class="card">
+                        <div class="section-heading">
+                            <div>
+                                <p class="section-kicker">Responsaveis</p>
+                                <h2>Maiores volumes por responsavel</h2>
+                            </div>
+                        </div>
+
+                        {% if valores_por_responsavel %}
+                            <div class="progress-list">
+                                {% for item in valores_por_responsavel %}
+                                    <div class="progress-item">
+                                        <div class="progress-item-head">
+                                            <span>{{ item.label }}</span>
+                                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                                        </div>
+                                        <div class="progress-track">
+                                            <div class="progress-bar progress-bar-amber" style="width: {{ item.percentual }}%;"></div>
+                                        </div>
+                                        <div class="progress-meta">{{ item.quantidade }} registro(s)</div>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <div class="empty-state">
+                                O recorte atual nao retornou dados suficientes por responsavel.
+                            </div>
+                        {% endif %}
+                    </article>
+
+                    <article class="card">
+                        <div class="section-heading">
+                            <div>
+                                <p class="section-kicker">Tipos</p>
+                                <h2>Tipos operacionais com maior volume</h2>
+                            </div>
+                        </div>
+
+                        {% if valores_por_tipo %}
+                            <div class="progress-list">
+                                {% for item in valores_por_tipo %}
+                                    <div class="progress-item">
+                                        <div class="progress-item-head">
+                                            <span>{{ item.label }}</span>
+                                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                                        </div>
+                                        <div class="progress-track">
+                                            <div class="progress-bar progress-bar-amber" style="width: {{ item.percentual }}%;"></div>
+                                        </div>
+                                        <div class="progress-meta">{{ item.quantidade }} registro(s)</div>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <div class="empty-state">
+                                Nao ha tipos suficientes para a leitura analitica deste filtro.
+                            </div>
+                        {% endif %}
+                    </article>
+
+                    <article class="card">
+                        <div class="section-heading">
+                            <div>
+                                <p class="section-kicker">Pagamento</p>
+                                <h2>Pago x carteira</h2>
+                            </div>
+                        </div>
+
+                        {% if valores_por_pagamento %}
+                            <div class="progress-list">
+                                {% for item in valores_por_pagamento %}
+                                    <div class="progress-item">
+                                        <div class="progress-item-head">
+                                            <span>{{ item.label }}</span>
+                                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                                        </div>
+                                        <div class="progress-track">
+                                            <div class="progress-bar" style="width: {{ item.percentual }}%;"></div>
+                                        </div>
+                                        <div class="progress-meta">{{ item.quantidade }} registro(s)</div>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <div class="empty-state">
+                                O recorte atual nao retornou dados para a situacao de pagamento.
+                            </div>
+                        {% endif %}
+                    </article>
+                </section>
+            </div>
+        </details>
+    </section>
+
+    <section class="card bi-collapsible-card">
+        <details class="filters-toggle filters-toggle-soft">
+            <summary>
+                <span>Origem e leitura dos dados</span>
+                <span class="arrow">&#9662;</span>
+            </summary>
+
+            <div class="filters-body">
+                <ul class="helper-list bi-helper-list">
+                    <li>
+                        <strong>Pessoal</strong>
+                        Soma RPVs classificados como pessoal e trabalhista.
+                    </li>
+                    <li>
+                        <strong>Pericial</strong>
+                        Separa RPVs periciais em uma leitura propria para apoiar a cota especifica.
+                    </li>
+                    <li>
+                        <strong>Comum</strong>
+                        Reune os demais RPVs normais e os dativos.
+                    </li>
+                    <li>
+                        <strong>Competencia</strong>
+                        Separa competencia de cadastro da competencia de pagamento para nao misturar carteira futura com gasto realizado.
+                    </li>
+                    <li>
+                        <strong>Projecao</strong>
+                        Usa media simples das 3 ultimas competencias pagas dentro do recorte atual.
+                    </li>
+                </ul>
+            </div>
+        </details>
+    </section>
+
+    <section class="card">
+        <details class="filters-toggle bi-data-toggle">
+            <summary>
+                <span>Base analitica do recorte</span>
+                <span class="arrow">&#9662;</span>
+            </summary>
+
+            <div class="filters-body">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-kicker">Detalhamento</p>
+                        <h2>Base analitica do recorte</h2>
+                    </div>
+                    <div class="muted">
+                        Exibindo {{ linhas|length }} de {{ total_linhas }} linha(s). Use o CSV para levar tudo.
+                    </div>
+                </div>
+
+                {% if linhas %}
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Comp. cadastro</th>
+                                    <th>Comp. pagamento</th>
+                                    <th>Status</th>
+                                    <th>Origem</th>
+                                    <th>Grupo</th>
+                                    <th>Tipo</th>
+                                    <th>Fluxo IRRF</th>
+                                    <th>Responsavel</th>
+                                    <th>Beneficiario</th>
+                                    <th>Documento</th>
+                                    <th>Processo</th>
+                                    <th>C.I.</th>
+                                    <th>Data pgto</th>
+                                    <th>Bruto</th>
+                                    <th>Pago</th>
+                                    <th>Em aberto</th>
+                                    <th>IRRF</th>
+                                    <th>Liquido</th>
+                                    <th>REINF</th>
+                                    <th>Abrir</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for linha in linhas %}
+                                    <tr>
+                                        <td>{{ linha.competencia_cadastro_legivel }}</td>
+                                        <td>{{ linha.competencia_pagamento_legivel }}</td>
+                                        <td>{{ linha.pagamento_status }}</td>
+                                        <td>{{ linha.origem }}</td>
+                                        <td>{{ linha.grupo_cota_label }}</td>
+                                        <td>{{ linha.tipo }}</td>
+                                        <td>{{ linha.fluxo_irrf_label }}</td>
+                                        <td>{{ linha.responsavel }}</td>
+                                        <td>{{ linha.nome }}</td>
+                                        <td>{{ linha.documento_limpo }}</td>
+                                        <td>{{ linha.processo }}</td>
+                                        <td>{{ linha.ci }}</td>
+                                        <td>{{ linha.data_pagamento_legivel }}</td>
+                                        <td>{{ values.render_value(linha.valor_bruto, 'moeda', 'compact') }}</td>
+                                        <td>{{ values.render_value(linha.valor_pago, 'moeda', 'compact') }}</td>
+                                        <td>{{ values.render_value(linha.valor_previsto_aberto, 'moeda', 'compact') }}</td>
+                                        <td>{{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</td>
+                                        <td>{{ values.render_value(linha.valor_liquido, 'moeda', 'compact') }}</td>
+                                        <td>{{ linha.reinf_status }}</td>
+                                        <td>
+                                            <a class="btn btn-ghost btn-sm" href="{{ linha.url }}">Abrir</a>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="empty-state">
+                        Nenhum registro encontrou esse conjunto de filtros.
+                    </div>
+                {% endif %}
+            </div>
+        </details>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

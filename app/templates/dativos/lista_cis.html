@@ -1,0 +1,513 @@
+﻿{% extends "base.html" %}
+
+{% block title %}RPVs dativos - SISCON{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Visão por C.I. dos RPVs dativos{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>RPVs dativos</h1>
+        <p class="muted">Visão principal do módulo, reunindo lote sem IRRF e itens com IRRF.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('dativos.lotes_sem_irrf') }}">Ver lotes sem IRRF</a>
+        <a class="btn btn-secondary" href="{{ url_for('dativos.itens_com_irrf') }}">Ver itens com IRRF</a>
+        <a class="btn" href="{{ url_for('dativos.novo_ci') }}">Nova C.I.</a>
+    </div>
+</div>
+
+<div class="filters-card">
+    <details class="filters-toggle"
+        data-filter-panel="dativos_cis"
+        {% if filtros.get('q') or filtros.get('ne') or filtros.get('exercicio') or filtros.get('ci') or filtros.get('responsavel') not in [None, '', 'todos', 'meus'] or filtros.get('grupo') not in [None, '', 'todos'] or filtros.get('situacao_rpv_id') or filtros.get('situacao_imposto_id') or mostrar_encerrados %}
+            open
+        {% endif %}
+    >
+        <summary>
+            <span>Filtros de pesquisa</span>
+            <span class="arrow">▼</span>
+        </summary>
+
+        <div class="filters-body">
+            <form method="GET" id="dativos-filter-form">
+                <input type="hidden" name="ordenar" value="{{ ordenar_atual }}">
+                <input type="hidden" name="direcao" value="{{ direcao_atual }}">
+                <input type="hidden" name="por_pagina" value="{{ por_pagina }}">
+
+                <div class="dativos-ci-filter-grid">
+                    <div class="form-group">
+                        <label for="q">Busca</label>
+                        <input
+                            type="text"
+                            id="q"
+                            name="q"
+                            placeholder="C.I., processo, nome, resumo ou NE"
+                            value="{{ filtros.get('q', '') }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ne">NE</label>
+                        <input
+                            type="text"
+                            id="ne"
+                            name="ne"
+                            placeholder="Ex.: 25"
+                            value="{{ filtros.get('ne', '') }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="exercicio">Exercício</label>
+                        <input type="month" id="exercicio" name="exercicio" value="{{ filtros.get('exercicio', '') }}">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="responsavel">Responsável</label>
+                        <select id="responsavel" name="responsavel">
+                            <option value="meus" {% if filtro_responsavel == 'meus' %}selected{% endif %}>Só os meus</option>
+                            <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                            {% for usuario in usuarios %}
+                                <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>
+                                    {{ usuario.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="grupo">Grupo</label>
+                        <select id="grupo" name="grupo">
+                            <option value="todos" {% if filtros.get('grupo', 'todos') == 'todos' %}selected{% endif %}>Todos</option>
+                            <option value="lote_sem_irrf" {% if filtros.get('grupo') == 'lote_sem_irrf' %}selected{% endif %}>Lote sem IRRF</option>
+                            <option value="item_com_irrf" {% if filtros.get('grupo') == 'item_com_irrf' %}selected{% endif %}>Item com IRRF</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="situacao_rpv_id">Situação do RPV</label>
+                        <select id="situacao_rpv_id" name="situacao_rpv_id">
+                            <option value="">Todas</option>
+                            {% for situacao in situacoes_rpv %}
+                                <option value="{{ situacao.id }}" {% if filtros.get('situacao_rpv_id') == situacao.id|string %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="situacao_imposto_id">Situação do IRRF</label>
+                        <select id="situacao_imposto_id" name="situacao_imposto_id">
+                            <option value="">Todas</option>
+                            {% for situacao in situacoes_imposto %}
+                                <option value="{{ situacao.id }}" {% if filtros.get('situacao_imposto_id') == situacao.id|string %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-inline" for="mostrar_encerrados">
+                            <input
+                                type="checkbox"
+                                id="mostrar_encerrados"
+                                name="mostrar_encerrados"
+                                value="1"
+                                {% if mostrar_encerrados %}checked{% endif %}
+                            >
+                            <span>Incluir concluídos e cancelados</span>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <button type="submit">Filtrar</button>
+                    </div>
+
+                    <div class="form-group">
+                        <a class="btn btn-secondary" href="{{ url_for('dativos.lista_cis', sem_favorito=1) }}">Limpar</a>
+                    </div>
+                </div>
+            </form>
+
+            {% set saved_filter_scope = 'dativos' %}
+            {% set saved_filter_form_id = 'dativos-filter-form' %}
+            {% set saved_filter_base_url = url_for('dativos.lista_cis') %}
+            {% set saved_filter_help = 'Salve combinacoes de responsavel, grupo e situacao para retomar os dativos mais rapido.' %}
+            {% set saved_filter_embedded = true %}
+            {% include "components/saved_filters_bar.html" %}
+        </div>
+    </details>
+</div>
+
+{% set processo_crosscheck_scope = 'dativos' %}
+{% set processo_crosscheck_grade_vazia = not linhas %}
+{% include "components/processo_crosscheck_card.html" %}
+
+{% if cis_incompletas %}
+<div class="section-card warning-panel">
+    <div class="inline-cluster-between">
+        <div>
+            <h2 class="section-card-title">C.I.s aguardando planilha</h2>
+            <p class="muted">
+                Estas C.I.s ja foram criadas, mas ainda nao possuem lote nem beneficiarios cadastrados.
+            </p>
+        </div>
+        <span class="summary-meta-pill">
+            {{ total_ci_incompletas }} pendente{% if total_ci_incompletas != 1 %}s{% endif %}
+        </span>
+    </div>
+
+    <div class="inline-cluster-sm content-top-14">
+        {% for ci_incompleta in cis_incompletas %}
+            <a class="btn btn-secondary btn-sm" href="{{ url_for('dativos.detalhe_ci', ci_id=ci_incompleta.id, retorno=url_retorno_atual) }}">
+                Abrir C.I. {{ ci_incompleta.processo_edoc }}
+            </a>
+        {% endfor %}
+    </div>
+
+    <p class="muted content-top-14">
+        Abra a C.I. para importar as planilhas ou completar manualmente o que ficou faltando.
+    </p>
+</div>
+{% endif %}
+
+<div class="list-card">
+    <div class="workbench-toolbar">
+        <div class="workbench-summary">
+            <div><strong>Responsável:</strong>
+                {% if filtro_responsavel == 'meus' %}
+                    Só os meus
+                {% elif filtro_responsavel and filtro_responsavel != 'todos' %}
+                    {% for usuario in usuarios %}
+                        {% if filtro_responsavel == usuario.id|string %}
+                            {{ usuario.nome }}
+                        {% endif %}
+                    {% endfor %}
+                {% else %}
+                    Todos
+                {% endif %}
+            </div>
+            <div><strong>C.I.s na consulta:</strong> {{ total_ci }}</div>
+            {% if total_ci_incompletas %}
+                <div><strong>Pendentes de planilha:</strong> {{ total_ci_incompletas }}</div>
+            {% endif %}
+            <div><strong>Lotes sem IRRF:</strong> {{ total_lotes }}</div>
+            <div><strong>Itens com IRRF:</strong> {{ total_itens_com_irrf }}</div>
+            <div><strong>Visão:</strong> {% if mostrar_encerrados %}Todos os status{% else %}Fila ativa{% endif %}</div>
+            <div><strong>Mostrando:</strong> {{ paginacao.inicio }}-{{ paginacao.fim }}</div>
+        </div>
+
+        <div class="workbench-controls">
+            <form method="GET">
+                {% for chave, valor in filtros_ocultos.items() %}
+                    <input type="hidden" name="{{ chave }}" value="{{ valor }}">
+                {% endfor %}
+                <span class="compact-label">Mostrar por página</span>
+                <select class="compact-select" name="por_pagina" data-auto-submit>
+                    {% for opcao in [10, 20, 50, 100] %}
+                        <option value="{{ opcao }}" {% if por_pagina == opcao %}selected{% endif %}>{{ opcao }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+    </div>
+
+    <div class="batch-toolbar">
+        <form
+            id="dativos-batch-form"
+            class="batch-form"
+            method="POST"
+            action="{{ url_for('dativos.atualizacao_lote_cis', **filtros.to_dict()) }}"
+            data-batch-form
+            data-batch-confirm="Aplicar a atualização em lote nos registros de dativo selecionados?"
+        >
+            {{ csrf_input() }}
+            <select name="situacao_rpv_id_lote">
+                <option value="">Manter situação do RPV</option>
+                {% for situacao in situacoes_rpv %}
+                    <option value="{{ situacao.id }}">{{ situacao.nome }}</option>
+                {% endfor %}
+            </select>
+
+            <select name="situacao_imposto_id_lote">
+                <option value="">Manter situação do IRRF</option>
+                {% for situacao in situacoes_imposto %}
+                    <option value="{{ situacao.id }}">{{ situacao.nome }}</option>
+                {% endfor %}
+            </select>
+
+            <button type="submit" class="btn btn-secondary">Atualizar selecionados</button>
+        </form>
+
+        <div class="batch-note">
+            O lote atua nas situações operacionais dos itens e lotes selecionados.
+        </div>
+    </div>
+
+    <div class="table-view-shell view-resumida" data-view-scope="dativos" data-view-default="resumida">
+        <div class="view-toolbar">
+            <div class="view-toolbar-label">Visão da grade</div>
+            <div class="view-options" role="group" aria-label="Presets de visualização dos dativos">
+                <button type="button" class="view-option is-active" data-view-option="resumida">Resumida</button>
+                <button type="button" class="view-option" data-view-option="pagamento">Pagamento</button>
+                <button type="button" class="view-option" data-view-option="fiscal">Fiscal</button>
+            </div>
+        </div>
+
+    <div class="table-wrap">
+        <table class="workbench-table is-dense">
+            <thead>
+                <tr>
+                    <th class="col-select sticky-cell sticky-left-1">
+                        <input type="checkbox" data-batch-select-all="dativos-batch-form" aria-label="Selecionar todos os dativos">
+                    </th>
+                    <th class="col-exercicio sticky-cell sticky-left-2">
+                        <a class="table-sort-link {% if ordenar_atual == 'exercicio' %}is-active{% endif %}" href="{{ sort_urls.exercicio }}">
+                            Exercício
+                            {% if ordenar_atual == 'exercicio' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-grupo">
+                        <a class="table-sort-link {% if ordenar_atual == 'grupo' %}is-active{% endif %}" href="{{ sort_urls.grupo }}">
+                            Grupo
+                            {% if ordenar_atual == 'grupo' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-resumo">
+                        <a class="table-sort-link {% if ordenar_atual == 'resumo' %}is-active{% endif %}" href="{{ sort_urls.resumo }}">
+                            Resumo operacional
+                            {% if ordenar_atual == 'resumo' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-valor">
+                        <a class="table-sort-link {% if ordenar_atual == 'valor' %}is-active{% endif %}" href="{{ sort_urls.valor }}">
+                            Valor
+                            {% if ordenar_atual == 'valor' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-imposto view-fiscal">
+                        <a class="table-sort-link {% if ordenar_atual == 'imposto' %}is-active{% endif %}" href="{{ sort_urls.imposto }}">
+                            Imposto
+                            {% if ordenar_atual == 'imposto' %}
+                                <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
+                            {% endif %}
+                        </a>
+                    </th>
+                    <th class="col-curta view-pagamento">NE</th>
+                    <th class="col-curta view-pagamento">OB</th>
+                    <th class="col-curta view-fiscal">OB IRRF</th>
+                    <th class="table-status-cell view-pagamento">Situação do RPV</th>
+                    <th class="table-status-cell view-fiscal">Situação do IRRF</th>
+                    <th class="table-actions-cell sticky-cell sticky-right-1">Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in linhas %}
+                    {% if linha.tipo == "lote_sem_irrf" %}
+                        <form id="quick-form-lote-{{ linha.id }}" method="POST" action="{{ url_for('dativos.atualizacao_rapida_lote', lote_id=linha.id, **filtros.to_dict()) }}">
+                            {{ csrf_input() }}
+                            <input type="hidden" name="origem" value="lista_cis">
+                        </form>
+                    {% else %}
+                        <form id="quick-form-item-{{ linha.id }}" method="POST" action="{{ url_for('dativos.atualizacao_rapida_item', item_id=linha.id, **filtros.to_dict()) }}">
+                            {{ csrf_input() }}
+                            <input type="hidden" name="origem" value="lista_cis">
+                        </form>
+                    {% endif %}
+
+                    <tr class="{% if linha.tipo == 'lote_sem_irrf' %}row-no-fiscal{% endif %}">
+                        <td class="table-select-cell sticky-cell sticky-left-1">
+                            <input
+                                type="checkbox"
+                                name="selecionados"
+                                value="{{ 'lote:' ~ linha.id if linha.tipo == 'lote_sem_irrf' else 'item:' ~ linha.id }}"
+                                form="dativos-batch-form"
+                                data-batch-checkbox="dativos-batch-form"
+                                aria-label="Selecionar {{ linha.resumo_operacional }}"
+                            >
+                        </td>
+                        <td class="sticky-cell sticky-left-2">{{ linha.exercicio }}</td>
+                        <td>
+                            {% if linha.tipo == "lote_sem_irrf" %}
+                                <span class="group-pill group-lote">Lote sem IRRF</span>
+                            {% else %}
+                                <span class="group-pill group-item">Item com IRRF</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="summary-main-row">
+                                <div class="resumo-box">{{ linha.resumo_operacional }}</div>
+                                <button
+                                    type="button"
+                                    class="btn btn-secondary btn-sm summary-copy-btn"
+                                    data-copy-target="resumo-dativo-{{ linha.tipo }}-{{ linha.id }}"
+                                >
+                                    Copiar
+                                </button>
+                            </div>
+                            <div class="summary-meta-row">
+                                <span class="summary-meta-pill">
+                                    {{ linha.documento_label }}: {{ linha.documento_valor }}
+                                </span>
+                                <span class="summary-meta-pill">
+                                    {% if linha.tipo == "item_com_irrf" and linha.imposto %}
+                                        IRRF: R$ {{ linha.imposto|moeda_br }}
+                                    {% elif linha.tipo == "lote_sem_irrf" %}
+                                        IRRF: Sem IRRF
+                                    {% else %}
+                                        IRRF: Pendente
+                                    {% endif %}
+                                </span>
+                                <span class="summary-meta-pill">
+                                    Responsavel: {{ linha.responsavel_nome }}
+                                </span>
+                                {% if linha.numero_se %}
+                                    <span class="summary-meta-pill">
+                                        SE: {{ linha.numero_se }}
+                                    </span>
+                                {% endif %}
+                            </div>
+                            <div class="summary-status-row summary-only">
+                                <span class="summary-status-pill {{ linha.situacao_rpv.cor_badge or 'badge-slate' }}">
+                                    RPV: {{ linha.situacao_rpv.nome if linha.situacao_rpv else 'Sem situação' }}
+                                </span>
+                                <span class="summary-status-pill {{ linha.situacao_imposto.cor_badge or 'badge-slate' }}">
+                                    IRRF: {{ linha.situacao_imposto.nome if linha.situacao_imposto else 'Sem situação' }}
+                                </span>
+                            </div>
+                            <input type="hidden" id="resumo-dativo-{{ linha.tipo }}-{{ linha.id }}" value="{{ linha.resumo_operacional }}">
+                        </td>
+                        <td>R$ {{ linha.valor|moeda_br }}</td>
+                        <td class="view-fiscal">
+                            {% if linha.tipo == "item_com_irrf" %}
+                                R$ {{ (linha.imposto or 0)|moeda_br }}
+                            {% else %}
+                                <span class="muted">Não se aplica</span>
+                            {% endif %}
+                        </td>
+                        <td class="view-pagamento">
+                            <input
+                                class="table-inline-input"
+                                type="text"
+                                name="nota_empenho"
+                                value="{{ linha.ne or '' }}"
+                                title="{{ 'NE compartilhada apenas dentro deste lote sem IRRF.' if linha.tipo == 'lote_sem_irrf' else 'NE única no sistema e obrigatória ao marcar como pago ou concluído.' }}"
+                                form="{{ 'quick-form-lote-' ~ linha.id if linha.tipo == 'lote_sem_irrf' else 'quick-form-item-' ~ linha.id }}"
+                            >
+                        </td>
+                        <td class="view-pagamento">
+                            <input
+                                class="table-inline-input"
+                                type="text"
+                                name="ordem_bancaria"
+                                value="{{ linha.ob or '' }}"
+                                title="{{ 'OB compartilhada apenas dentro deste lote sem IRRF.' if linha.tipo == 'lote_sem_irrf' else 'OB principal única no sistema e obrigatória ao marcar como pago ou concluído.' }}"
+                                form="{{ 'quick-form-lote-' ~ linha.id if linha.tipo == 'lote_sem_irrf' else 'quick-form-item-' ~ linha.id }}"
+                            >
+                        </td>
+                        <td class="view-fiscal">
+                            {% if linha.tipo == "item_com_irrf" %}
+                                <input
+                                    class="table-inline-input"
+                                    type="text"
+                                    name="ob_imposto"
+                                    value="{{ linha.ob_irrf or '' }}"
+                                    form="{{ 'quick-form-item-' ~ linha.id }}"
+                                >
+                            {% else %}
+                                <span class="muted">Não se aplica</span>
+                            {% endif %}
+                        </td>
+                        <td class="view-pagamento">
+                            <select
+                                class="status-select {{ linha.situacao_rpv.cor_badge or 'badge-slate' }}"
+                                name="situacao_rpv_id"
+                                form="{{ 'quick-form-lote-' ~ linha.id if linha.tipo == 'lote_sem_irrf' else 'quick-form-item-' ~ linha.id }}"
+                            >
+                                {% for situacao in situacoes_rpv %}
+                                    <option value="{{ situacao.id }}" {% if linha.situacao_rpv_id == situacao.id %}selected{% endif %}>
+                                        {{ situacao.nome }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td class="view-fiscal">
+                            {% if linha.tipo == "item_com_irrf" %}
+                                <select
+                                    class="status-select {{ linha.situacao_imposto.cor_badge or 'badge-slate' }}"
+                                    name="situacao_imposto_id"
+                                    form="{{ 'quick-form-item-' ~ linha.id }}"
+                                >
+                                    {% for situacao in situacoes_imposto %}
+                                        <option value="{{ situacao.id }}" {% if linha.situacao_imposto_id == situacao.id %}selected{% endif %}>
+                                            {{ situacao.nome }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            {% else %}
+                                <span class="summary-meta-pill">Sem IRRF</span>
+                            {% endif %}
+                        </td>
+                        <td class="sticky-cell sticky-right-1">
+                            <div class="table-inline-actions">
+                                <button
+                                    type="submit"
+                                    class="btn btn-sm"
+                                    form="{{ 'quick-form-lote-' ~ linha.id if linha.tipo == 'lote_sem_irrf' else 'quick-form-item-' ~ linha.id }}"
+                                >
+                                    Salvar
+                                </button>
+                                <a class="btn btn-secondary btn-sm" href="{{ linha.abrir_url }}">Abrir</a>
+                            </div>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr>
+                        <td colspan="12">Nenhum registro de dativo encontrado.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    </div>
+
+    <div class="pagination-bar">
+        <div class="pagination-status">
+            Página {{ paginacao.pagina }} de {{ paginacao.total_paginas }}
+        </div>
+        <div class="pagination-links">
+            {% if pagina_anterior_url %}
+                <a class="pagination-link" href="{{ pagina_anterior_url }}">Anterior</a>
+            {% else %}
+                <span class="pagination-link is-disabled">Anterior</span>
+            {% endif %}
+
+            {% for numero in paginas_visiveis %}
+                {% if numero == paginacao.pagina %}
+                    <span class="pagination-link is-current">{{ numero }}</span>
+                {% else %}
+                    <a class="pagination-link" href="{{ pagina_urls[numero] }}">{{ numero }}</a>
+                {% endif %}
+            {% endfor %}
+
+            {% if proxima_pagina_url %}
+                <a class="pagination-link" href="{{ proxima_pagina_url }}">Próxima</a>
+            {% else %}
+                <span class="pagination-link is-disabled">Próxima</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+

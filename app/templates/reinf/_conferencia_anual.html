@@ -1,0 +1,133 @@
+<section class="card">
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Fechamento anual</p>
+            <h2>Conferencia anual por beneficiario</h2>
+            <p class="section-caption">
+                So entram pagamentos com IRRF. A abertura anual resume os valores por exercicio pago, sem repetir a lista de processos da conferencia mensal.
+            </p>
+        </div>
+    </div>
+
+    <form method="GET" class="reinf-conference-bar">
+        <input type="hidden" name="visao" value="conferencia_anual">
+        <input type="hidden" name="competencia" value="{{ filtro_competencia }}">
+        <input type="hidden" name="q" value="{{ filtro_busca }}">
+        <input type="hidden" name="responsavel" value="{{ filtro_responsavel }}">
+        <div class="form-group">
+            <label for="ano-conferencia">Ano</label>
+            <select id="ano-conferencia" name="ano">
+                {% for ano in anos_disponiveis %}
+                    <option value="{{ ano }}" {% if filtro_ano == ano %}selected{% endif %}>{{ ano }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-secondary">Atualizar leitura</button>
+        <a class="btn btn-ghost" href="{{ url_for('reinf.index', visao='conferencia_anual', ano=filtro_ano, competencia=filtro_competencia) }}">Limpar</a>
+    </form>
+
+    <details class="filters-toggle filters-toggle-soft reinf-conference-filters" {% if filtros_abertos_conferencia %}open{% endif %}>
+        <summary>
+            <span>Refinar busca</span>
+            <span class="arrow">▼</span>
+        </summary>
+        <div class="filters-body">
+            <form method="GET" class="reinf-filter-grid">
+                <input type="hidden" name="visao" value="conferencia_anual">
+                <input type="hidden" name="competencia" value="{{ filtro_competencia }}">
+                <input type="hidden" name="ano" value="{{ filtro_ano }}">
+                <div class="form-group">
+                    <label for="q-conferencia-anual">Busca</label>
+                    <input type="text" id="q-conferencia-anual" name="q" value="{{ filtro_busca }}" placeholder="Nome, CPF/CNPJ, processo ou C.I.">
+                </div>
+                <div class="form-group">
+                    <label for="responsavel-conferencia-anual">Responsável</label>
+                    <select id="responsavel-conferencia-anual" name="responsavel">
+                        <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                        {% for usuario in usuarios %}
+                            <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>{{ usuario.nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="reinf-filter-actions">
+                    <button type="submit">Aplicar</button>
+                </div>
+            </form>
+        </div>
+    </details>
+</section>
+
+<div class="filter-info">
+    <div><strong>Ano:</strong> {{ filtro_ano }}</div>
+    <div><strong>Beneficiarios:</strong> {{ conferencia_anual.totais.beneficiarios }}</div>
+    <div><strong>Valor base:</strong> {{ values.render_value(conferencia_anual.totais.valor_base, 'moeda', 'compact') }}</div>
+    <div><strong>IRRF retido:</strong> {{ values.render_value(conferencia_anual.totais.valor_irrf, 'moeda', 'compact') }}</div>
+</div>
+
+<section class="card">
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Tabela limpa</p>
+            <h2>Resumo anual de conferencia REINF</h2>
+        </div>
+    </div>
+
+    {% if conferencia_anual.tem_dados %}
+        <div class="table-wrap">
+            <table class="reinf-table reinf-conference-table">
+                <thead>
+                    <tr>
+                        <th>Ano</th>
+                        <th>Nome</th>
+                        <th>CPF/CNPJ</th>
+                        <th>Valor total do ano</th>
+                        <th>IRRF retido no ano</th>
+                        <th>Detalhar</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for linha in conferencia_anual.linhas %}
+                        {% set detalhe_id = "reinf-anual-detalhe-" ~ loop.index %}
+                        <tr class="reinf-conference-summary-row">
+                            <td>{{ linha.ano }}</td>
+                            <td><strong>{{ linha.beneficiario }}</strong></td>
+                            <td>{{ linha.documento }}</td>
+                            <td>{{ values.render_value(linha.valor_base, 'moeda', 'compact') }}</td>
+                            <td>{{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</td>
+                            <td class="reinf-conference-action-cell">
+                                <button
+                                    type="button"
+                                    class="btn btn-ghost btn-sm reinf-detail-trigger"
+                                    data-detail-target="{{ detalhe_id }}"
+                                    data-label-closed="Ver exercicios"
+                                    data-label-open="Fechar exercicios"
+                                    aria-expanded="false"
+                                    aria-controls="{{ detalhe_id }}"
+                                >
+                                    Ver exercicios
+                                </button>
+                            </td>
+                        </tr>
+                        <tr id="{{ detalhe_id }}" class="reinf-conference-detail-row" hidden>
+                            <td colspan="6">
+                                <div class="reinf-conference-detail-panel">
+                                    {{ conferencia.render_conferencia_anual_painel(linha, values) }}
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    <tr class="table-total-row">
+                        <td colspan="3"><strong>Total do ano</strong></td>
+                        <td><strong>{{ values.render_value(conferencia_anual.totais.valor_base, 'moeda', 'compact') }}</strong></td>
+                        <td><strong>{{ values.render_value(conferencia_anual.totais.valor_irrf, 'moeda', 'compact') }}</strong></td>
+                        <td><strong>Consolidado por exercicio</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            Nenhum pagamento com IRRF foi encontrado para esse ano na conferencia anual.
+        </div>
+    {% endif %}
+</section>

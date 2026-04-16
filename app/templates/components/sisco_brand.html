@@ -1,0 +1,10 @@
+{% macro mark(scope='sidebar') -%}
+<div class="sisco-mark sisco-mark-{{ scope }}" aria-hidden="true">
+    <span class="sisco-mark-orbit sisco-mark-orbit-a"></span>
+    <span class="sisco-mark-orbit sisco-mark-orbit-b"></span>
+    <span class="sisco-mark-grid"></span>
+    <span class="sisco-mark-core">
+        <span class="sisco-mark-monogram">SI</span>
+    </span>
+</div>
+{%- endmacro %}

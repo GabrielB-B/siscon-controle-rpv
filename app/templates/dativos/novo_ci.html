@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}RPVs dativos - Nova C.I.{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Cadastro manual assistido da C.I.{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Nova C.I. de dativo</h1>
+        <p class="muted">Primeiro criamos a C.I. e depois adicionamos os itens sem IRRF e com IRRF.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('dativos.index') }}">Retornar</a>
+    </div>
+</div>
+
+<div class="section-card content-card-narrow">
+    <form method="POST">
+        {{ csrf_input() }}
+        <div class="form-group">
+            <label for="exercicio">Exercício (mês/ano)</label>
+            <input type="month" id="exercicio" name="exercicio" value="{{ form_data.get('exercicio', '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="processo_edoc">C.I. / Processo e-Doc</label>
+            <input type="text" id="processo_edoc" name="processo_edoc" value="{{ form_data.get('processo_edoc', '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="data_ci">Data da C.I.</label>
+            <input type="date" id="data_ci" name="data_ci" value="{{ form_data.get('data_ci', '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="responsavel_id">Responsável operacional</label>
+            <select id="responsavel_id" name="responsavel_id" required>
+                {% set responsavel_selecionado = form_data.get('responsavel_id', current_user.id|string) %}
+                {% for usuario in usuarios %}
+                    <option value="{{ usuario.id }}" {% if responsavel_selecionado == usuario.id|string %}selected{% endif %}>
+                        {{ usuario.nome }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <button type="submit">Criar C.I. de dativo</button>
+    </form>
+</div>
+{% endblock %}

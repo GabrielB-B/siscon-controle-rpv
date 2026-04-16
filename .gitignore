@@ -1,0 +1,53 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+.mypy_cache/
+.ruff_cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+instance/
+*.secret
+*.key
+*.pem
+*.pfx
+*.crt
+*.cer
+admin_bootstrap_password.txt
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Runtime and local state
+backups/
+runtime/
+*_runtime/
+tmp*/
+tmp_*/
+tmp*.txt
+*.log
+
+# User data, imports and exports
+entrada/
+saida/
+*.xlsx
+*.xls
+*.xlsm
+*.ods
+*.csv
+*.pdf
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

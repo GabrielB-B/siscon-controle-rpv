@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}SISCON{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=(static_asset_version('css/app.css') if static_asset_version is defined else '1')) }}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    {% if current_user.is_authenticated %}
+        {% set endpoint = request.endpoint or '' %}
+        {% import "components/ui_icon.html" as ui %}
+        {% import "components/sisco_brand.html" as sisco %}
+
+        <div class="app-shell" id="app-shell" data-user-scope="{{ current_user.id }}">
+            <aside class="sidebar" id="sidebar">
+                <div class="brand">
+                    {{ sisco.mark('sidebar') }}
+                    <div>
+                        <h1>SISCON</h1>
+                        <p>Sistema de controle do setor</p>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="menu-group-title">Trabalho</p>
+                    <nav class="menu">
+                        <a
+                            href="{{ url_for('dashboard.index') }}"
+                            class="menu-link {% if endpoint == 'dashboard.index' %}is-active{% endif %}"
+                        >
+                            <span class="menu-icon">{{ ui.icon('home') }}</span>
+                            <span class="menu-text">Painel inicial</span>
+                        </a>
+                        <a
+                            href="{{ url_for('dashboard.bi') }}"
+                            class="menu-link {% if endpoint == 'dashboard.bi' %}is-active{% endif %}"
+                        >
+                            <span class="menu-icon">{{ ui.icon('chart') }}</span>
+                            <span class="menu-text">BI</span>
+                        </a>
+                        <a
+                            href="{{ url_for('cadastros.lista_rpvs') }}"
+                            class="menu-link {% if endpoint.startswith('cadastros.') %}is-active{% endif %}"
+                        >
+                            <span class="menu-icon">{{ ui.icon('list') }}</span>
+                            <span class="menu-text">RPVs normais</span>
+                        </a>
+                        <a
+                            href="{{ url_for('dativos.lista_cis') }}"
+                            class="menu-link {% if endpoint.startswith('dativos.') %}is-active{% endif %}"
+                        >
+                            <span class="menu-icon">{{ ui.icon('folder') }}</span>
+                            <span class="menu-text">RPVs dativos</span>
+                        </a>
+                        <a
+                            href="{{ url_for('reinf.index') }}"
+                            class="menu-link {% if endpoint.startswith('reinf.') %}is-active{% endif %}"
+                        >
+                            <span class="menu-icon">{{ ui.icon('shield') }}</span>
+                            <span class="menu-text">REINF</span>
+                        </a>
+                        <a
+                            href="{{ url_for('cadastros.lista_pendencias_documentais') }}"
+                            class="menu-link {% if endpoint == 'cadastros.lista_pendencias_documentais' or endpoint == 'cadastros.detalhe_pendencia_documental' %}is-active{% endif %}"
+                        >
+                            <span class="menu-icon">{{ ui.icon('list') }}</span>
+                            <span class="menu-text">Documentos pendentes de RPVs</span>
+                        </a>
+                    </nav>
+                </div>
+
+                {% if current_user.is_admin %}
+                    <div>
+                        <p class="menu-group-title">Administração</p>
+                        <nav class="menu">
+                            <a
+                                href="{{ url_for('usuarios.lista') }}"
+                                class="menu-link {% if endpoint.startswith('usuarios.') %}is-active{% endif %}"
+                            >
+                                <span class="menu-icon">{{ ui.icon('users') }}</span>
+                                <span class="menu-text">Usuários</span>
+                            </a>
+                        </nav>
+                    </div>
+                {% endif %}
+
+                <div class="sidebar-footer">
+                    <div class="sidebar-footer-label">Usuário ativo</div>
+                    <div class="user-name">{{ current_user.nome }}</div>
+                    <a class="sidebar-footer-link" href="{{ url_for('usuarios.meu_cadastro') }}">
+                        <span class="sidebar-footer-icon">{{ ui.icon('user') }}</span>
+                        <span>Meu cadastro</span>
+                    </a>
+                    <a class="sidebar-footer-link" href="{{ url_for('usuarios.minha_senha') }}">
+                        <span class="sidebar-footer-icon">{{ ui.icon('key') }}</span>
+                        <span>Minha senha</span>
+                    </a>
+                    <a class="sidebar-footer-link" href="{{ url_for('auth.logout') }}">
+                        <span class="sidebar-footer-icon">{{ ui.icon('logout') }}</span>
+                        <span>Sair do sistema</span>
+                    </a>
+                </div>
+            </aside>
+
+            <main class="main">
+                <header class="topbar">
+                    <div class="topbar-left">
+                        <button
+                            type="button"
+                            class="btn btn-ghost btn-icon"
+                            data-sidebar-toggle
+                            aria-label="Alternar menu lateral"
+                        >
+                            {{ ui.icon('menu', 'ui-icon-lg') }}
+                        </button>
+                        <div>
+                            <div class="topbar-title">{% block topbar_title %}SISCON{% endblock %}</div>
+                            <div class="topbar-subtitle">{% block topbar_subtitle %}Ambiente interno de trabalho{% endblock %}</div>
+                        </div>
+                    </div>
+
+                    <div class="topbar-user">
+                        <span class="topbar-user-icon">{{ ui.icon('user') }}</span>
+                        <span>Conectado como</span>
+                        <strong>{{ current_user.nome }}</strong>
+                    </div>
+                </header>
+
+                <div class="main-content">
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                        {% if messages %}
+                            <div class="flash-stack">
+                                {% for category, message in messages %}
+                                    {% set flash_category = category if category in ['success', 'danger', 'info', 'warning'] else 'info' %}
+                                    {% if flash_category == 'success' %}
+                                        {% set flash_badge = 'OK' %}
+                                        {% set flash_title = 'Operacao concluida' %}
+                                    {% elif flash_category == 'danger' %}
+                                        {% set flash_badge = 'ALR' %}
+                                        {% set flash_title = 'Atencao imediata' %}
+                                    {% elif flash_category == 'warning' %}
+                                        {% set flash_badge = 'ATN' %}
+                                        {% set flash_title = 'Revise antes de seguir' %}
+                                    {% else %}
+                                        {% set flash_badge = 'INFO' %}
+                                        {% set flash_title = 'Aviso do sistema' %}
+                                    {% endif %}
+                                    <div class="flash flash-{{ flash_category }}" role="{% if flash_category == 'danger' %}alert{% else %}status{% endif %}">
+                                        <div class="flash-badge" aria-hidden="true">{{ flash_badge }}</div>
+                                        <div class="flash-copy">
+                                            <strong class="flash-title">{{ flash_title }}</strong>
+                                            <div class="flash-message">{{ message }}</div>
+                                        </div>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    {% endwith %}
+
+                    {% block content %}{% endblock %}
+
+                    {% if app_release_label %}
+                        <footer class="app-release-footer">
+                            <span class="app-release-chip">{{ app_release_label }}</span>
+                        </footer>
+                    {% endif %}
+                </div>
+            </main>
+        </div>
+    {% else %}
+        <div class="main-content">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="flash-stack">
+                        {% for category, message in messages %}
+                            {% set flash_category = category if category in ['success', 'danger', 'info', 'warning'] else 'info' %}
+                            {% if flash_category == 'success' %}
+                                {% set flash_badge = 'OK' %}
+                                {% set flash_title = 'Operacao concluida' %}
+                            {% elif flash_category == 'danger' %}
+                                {% set flash_badge = 'ALR' %}
+                                {% set flash_title = 'Atencao imediata' %}
+                            {% elif flash_category == 'warning' %}
+                                {% set flash_badge = 'ATN' %}
+                                {% set flash_title = 'Revise antes de seguir' %}
+                            {% else %}
+                                {% set flash_badge = 'INFO' %}
+                                {% set flash_title = 'Aviso do sistema' %}
+                            {% endif %}
+                            <div class="flash flash-{{ flash_category }}" role="{% if flash_category == 'danger' %}alert{% else %}status{% endif %}">
+                                <div class="flash-badge" aria-hidden="true">{{ flash_badge }}</div>
+                                <div class="flash-copy">
+                                    <strong class="flash-title">{{ flash_title }}</strong>
+                                    <div class="flash-message">{{ message }}</div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            <div class="content-guest-shell">
+                {% block content_guest %}{% endblock %}
+            </div>
+
+            {% if app_release_label %}
+                <footer class="app-release-footer">
+                    <span class="app-release-chip">{{ app_release_label }}</span>
+                </footer>
+            {% endif %}
+        </div>
+    {% endif %}
+
+    <div class="confirm-dialog" id="app-confirm-dialog" data-variant="warning" hidden>
+        <div class="confirm-dialog-backdrop" data-confirm-close></div>
+        <div
+            class="confirm-dialog-panel"
+            id="app-confirm-dialog-panel"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="app-confirm-title"
+            aria-describedby="app-confirm-message"
+            tabindex="-1"
+        >
+            <div class="confirm-dialog-head">
+                <div class="confirm-dialog-badge" id="app-confirm-badge" aria-hidden="true">ATN</div>
+                <div class="confirm-dialog-copy">
+                    <div class="confirm-dialog-kicker">Confirmacao operacional</div>
+                    <h2 class="confirm-dialog-title" id="app-confirm-title">Confirmar acao</h2>
+                </div>
+            </div>
+            <p class="confirm-dialog-message" id="app-confirm-message">Deseja continuar?</p>
+            <div class="confirm-dialog-actions">
+                <button type="button" class="btn btn-secondary" id="app-confirm-cancel">Voltar</button>
+                <button type="button" class="btn" id="app-confirm-submit">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js', v=(static_asset_version('js/app.js') if static_asset_version is defined else '1')) }}"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

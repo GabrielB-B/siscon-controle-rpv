@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+
+{% block title %}{% if modo == 'novo' %}Novo usuário{% else %}Editar usuário{% endif %} - SISCON{% endblock %}
+{% block topbar_title %}{% if modo == 'novo' %}Novo usuário{% else %}Editar usuário{% endif %}{% endblock %}
+{% block topbar_subtitle %}Gestão de acessos do sistema{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h1>{% if modo == 'novo' %}Cadastrar usuário{% else %}Editar usuário{% endif %}</h1>
+        <p class="muted">
+            {% if modo == 'novo' %}
+                Crie apenas o acesso inicial. A própria pessoa completa email, telefone, cargo e setor no primeiro uso.
+            {% else %}
+                Atualize dados de identidade, acesso e recuperação sem mexer no banco manualmente.
+            {% endif %}
+        </p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('usuarios.lista') }}">Retornar</a>
+    </div>
+</div>
+
+{% if usuario %}
+    <section class="user-form-card">
+        <div class="user-form-grid">
+            <div class="user-readonly">
+                <strong>ID</strong><br>
+                {{ usuario.id }}
+            </div>
+            <div class="user-readonly">
+                <strong>Status atual</strong><br>
+                {% if usuario.ativo %}Ativo{% else %}Inativo{% endif %}
+            </div>
+            <div class="user-readonly">
+                <strong>Último login</strong><br>
+                {{ usuario.ultimo_login_legivel }}
+            </div>
+            <div class="user-readonly">
+                <strong>Senha alterada em</strong><br>
+                {{ usuario.senha_alterada_em.strftime('%d/%m/%Y %H:%M') if usuario.senha_alterada_em else 'Ainda não registrada' }}
+            </div>
+        </div>
+    </section>
+{% endif %}
+
+<form method="POST" class="user-form-card">
+    {{ csrf_input() }}
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Identidade</p>
+            <h2>{% if modo == 'novo' %}Acesso inicial{% else %}Dados do usuário{% endif %}</h2>
+        </div>
+    </div>
+
+    <div class="user-form-grid">
+        <div class="form-group full-width">
+            <label for="nome">Nome completo</label>
+            <input
+                type="text"
+                id="nome"
+                name="nome"
+                value="{{ form_data.get('nome', usuario.nome if usuario else '') }}"
+                required
+            >
+        </div>
+
+        {% if modo != 'novo' %}
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input
+                    type="email"
+                    id="email"
+                    name="email"
+                    value="{{ form_data.get('email', usuario.email if usuario else '') }}"
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="telefone">Telefone</label>
+                <input
+                    type="text"
+                    id="telefone"
+                    name="telefone"
+                    value="{{ form_data.get('telefone', usuario.telefone_formatado if usuario else '') }}"
+                    placeholder="(79) 99999-9999"
+                    maxlength="16"
+                    inputmode="numeric"
+                    autocomplete="tel"
+                    data-phone-field
+                >
+                <small class="muted">Padrao adotado: telefone com DDD.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="cargo">Cargo</label>
+                <input
+                    type="text"
+                    id="cargo"
+                    name="cargo"
+                    value="{{ form_data.get('cargo', usuario.cargo if usuario else '') }}"
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="setor">Setor</label>
+                <input
+                    type="text"
+                    id="setor"
+                    name="setor"
+                    value="{{ form_data.get('setor', usuario.setor if usuario else '') }}"
+                >
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="section-heading content-top-18">
+        <div>
+            <p class="section-kicker">Acesso</p>
+            <h2>Credenciais e permissões</h2>
+        </div>
+    </div>
+
+    <div class="user-form-grid">
+        <div class="form-group">
+            <label for="login">Login</label>
+            <input
+                type="text"
+                id="login"
+                name="login"
+                value="{{ form_data.get('login', usuario.login if usuario else '') }}"
+                required
+            >
+        </div>
+
+        <div class="form-group">
+            <label for="senha">
+                {% if modo == 'novo' %}Senha inicial{% else %}Nova senha{% endif %}
+            </label>
+            <input type="password" id="senha" name="senha" {% if modo == 'novo' %}required{% endif %}>
+            <small class="muted">
+                {% if modo == 'novo' %}
+                    Mínimo de 8 caracteres, com letras e números.
+                {% else %}
+                    Deixe em branco para manter a senha atual.
+                {% endif %}
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-inline" for="ativo">
+                <input
+                    type="checkbox"
+                    id="ativo"
+                    name="ativo"
+                    value="1"
+                    {% if form_data %}
+                        {% if form_data.get('ativo') == '1' %}checked{% endif %}
+                    {% elif usuario %}
+                        {% if usuario.ativo %}checked{% endif %}
+                    {% else %}
+                        checked
+                    {% endif %}
+                >
+                <span>
+                    <strong>Usuário ativo</strong><br>
+                    <span class="muted">Quando ativo, pode entrar no sistema.</span>
+                </span>
+            </label>
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-inline" for="is_admin">
+                <input
+                    type="checkbox"
+                    id="is_admin"
+                    name="is_admin"
+                    value="1"
+                    {% if form_data %}
+                        {% if form_data.get('is_admin') == '1' %}checked{% endif %}
+                    {% elif usuario and usuario.is_admin %}
+                        checked
+                    {% endif %}
+                >
+                <span>
+                    <strong>Perfil administrador</strong><br>
+                    <span class="muted">Pode gerenciar usuários e funções administrativas.</span>
+                </span>
+            </label>
+        </div>
+
+        <div class="form-group full-width">
+            <label class="checkbox-inline" for="forcar_troca_senha">
+                <input
+                    type="checkbox"
+                    id="forcar_troca_senha"
+                    name="forcar_troca_senha"
+                    value="1"
+                    {% if form_data %}
+                        {% if form_data.get('forcar_troca_senha') == '1' %}checked{% endif %}
+                    {% elif usuario %}
+                        {% if usuario.forcar_troca_senha %}checked{% endif %}
+                    {% else %}
+                        checked
+                    {% endif %}
+                >
+                <span>
+                    <strong>Forçar troca de senha no próximo login</strong><br>
+                    <span class="muted">Use essa opção para novos usuários, redefinições administrativas e recuperação assistida.</span>
+                </span>
+            </label>
+        </div>
+
+        {% if modo == 'novo' %}
+            <div class="hint-box full-width">
+                Depois do primeiro login, o próprio usuário será direcionado para completar email, telefone, cargo e setor antes de usar o sistema normalmente.
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="form-actions">
+        <button type="submit">{% if modo == 'novo' %}Criar usuário{% else %}Salvar alterações{% endif %}</button>
+        <a class="btn btn-secondary" href="{{ url_for('usuarios.lista') }}">Cancelar</a>
+    </div>
+</form>
+{% endblock %}

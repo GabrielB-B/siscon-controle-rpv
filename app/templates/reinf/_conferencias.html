@@ -1,0 +1,74 @@
+{% macro render_conferencia_mensal_painel(linha, values) %}
+    <div class="reinf-conference-panel-head">
+        <div>
+            <strong>{{ linha.beneficiario }}</strong>
+            <div class="progress-meta">{{ linha.documento }} | {{ linha.pagamentos|length }} processo(s) em {{ linha.competencia_label }}</div>
+        </div>
+        <div class="reinf-conference-panel-totals">
+            <span>Base {{ values.render_value(linha.valor_base, 'moeda', 'compact') }}</span>
+            <span>IRRF {{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</span>
+        </div>
+    </div>
+
+    <div class="reinf-process-flow-grid">
+        {% for pagamento in linha.pagamentos %}
+            <article class="reinf-process-flow-item">
+                <div class="reinf-process-flow-head">
+                    <strong>{{ pagamento.processo }}</strong>
+                </div>
+                <div class="reinf-process-flow-values">
+                    <div class="reinf-process-flow-metric">
+                        <span>Valor bruto</span>
+                        <strong>{{ values.render_value(pagamento.valor_bruto, 'moeda', 'compact') }}</strong>
+                    </div>
+                    <div class="reinf-process-flow-metric">
+                        <span>IRRF retido</span>
+                        <strong>{{ values.render_value(pagamento.valor_irrf, 'moeda', 'compact') }}</strong>
+                    </div>
+                    <div class="reinf-process-flow-metric">
+                        <span>Liquido</span>
+                        <strong>{{ values.render_value(pagamento.valor_liquido, 'moeda', 'compact') }}</strong>
+                    </div>
+                </div>
+            </article>
+        {% endfor %}
+    </div>
+{% endmacro %}
+
+{% macro render_conferencia_anual_painel(linha, values) %}
+    <div class="reinf-conference-panel-head">
+        <div>
+            <strong>{{ linha.beneficiario }}</strong>
+            <div class="progress-meta">{{ linha.documento }} | resumo mensal consolidado do ano</div>
+        </div>
+        <div class="reinf-conference-panel-totals">
+            <span>Base {{ values.render_value(linha.valor_base, 'moeda', 'compact') }}</span>
+            <span>IRRF {{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</span>
+        </div>
+    </div>
+
+    <div class="reinf-process-flow-grid">
+        {% for mes in linha.meses %}
+            <article class="reinf-process-flow-item">
+                <div class="reinf-process-flow-head">
+                    <span class="reinf-process-kicker">Exercicio pago</span>
+                    <strong>{{ mes.competencia_label }}</strong>
+                </div>
+                <div class="reinf-process-flow-values">
+                    <div class="reinf-process-flow-metric">
+                        <span>Valor bruto</span>
+                        <strong>{{ values.render_value(mes.valor_bruto, 'moeda', 'compact') }}</strong>
+                    </div>
+                    <div class="reinf-process-flow-metric">
+                        <span>IRRF retido</span>
+                        <strong>{{ values.render_value(mes.valor_irrf, 'moeda', 'compact') }}</strong>
+                    </div>
+                    <div class="reinf-process-flow-metric">
+                        <span>Liquido</span>
+                        <strong>{{ values.render_value(mes.valor_liquido, 'moeda', 'compact') }}</strong>
+                    </div>
+                </div>
+            </article>
+        {% endfor %}
+    </div>
+{% endmacro %}

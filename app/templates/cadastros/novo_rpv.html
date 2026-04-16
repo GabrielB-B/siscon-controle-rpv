@@ -1,0 +1,383 @@
+{% extends "base.html" %}
+
+{% block title %}Nova RPV normal - SISCON{% endblock %}
+
+{% block topbar_title %}RPVs normais{% endblock %}
+
+{% block topbar_subtitle %}Cadastro inicial de RPV normal{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Nova RPV normal</h1>
+        <p class="muted">Preencha apenas o essencial para iniciar uma RPV normal dentro da fila operacional.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('cadastros.lista_rpvs') }}">Voltar para RPVs normais</a>
+    </div>
+</div>
+
+{% if processo_existente %}
+<div class="section-card alert-duplicate">
+    <h3 class="section-card-title">Processo já existente</h3>
+    <p><strong>Número do processo:</strong> {{ processo_existente.numero_processo }}</p>
+    <p><strong>Processo e-Doc / C.I.:</strong> {{ processo_existente.processo_edoc }}</p>
+    <p><strong>Exercício:</strong> {{ processo_existente.exercicio }}</p>
+
+    {% if registro_existente_mesmo_documento %}
+        <p><strong>Já existe beneficiário com este documento neste processo.</strong></p>
+        <p><strong>Beneficiário:</strong> {{ registro_existente_mesmo_documento.nome_beneficiario }}</p>
+        <p><strong>Documento:</strong> {{ registro_existente_mesmo_documento.tipo_documento_efetivo }} {{ registro_existente_mesmo_documento.documento_formatado }}</p>
+    {% else %}
+        <p>Se for realmente outro beneficiário do mesmo processo, você pode confirmar e continuar.</p>
+    {% endif %}
+    {% if registros_mesmo_processo %}
+        <div class="duplicate-list">
+            <p class="stacked-flow-note"><strong>Registros já cadastrados neste processo (com C.I.):</strong></p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Beneficiário</th>
+                        <th>Documento</th>
+                        <th>C.I.</th>
+                        <th>Abrir</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for registro_existente in registros_mesmo_processo %}
+                        <tr>
+                            <td>{{ registro_existente.nome_beneficiario }}</td>
+                            <td>{{ registro_existente.tipo_documento_efetivo }} {{ registro_existente.documento_formatado }}</td>
+                            <td>{{ registro_existente.processo.processo_edoc }}</td>
+                            <td>
+                                <a class="btn btn-secondary" href="{{ url_for('cadastros.editar_rpv', registro_id=registro_existente.id) }}">
+                                    Ver registro
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<form method="POST" data-irrf-calculator data-irrf-calc-url="{{ url_for('cadastros.calcular_irrf_sugerido') }}">
+    {{ csrf_input() }}
+    {% if pendencia_documental and pendencia_documental.id %}
+        <input type="hidden" name="pendencia_id" value="{{ pendencia_documental.id }}">
+    {% endif %}
+    <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente" value="0">
+    <input type="hidden" name="confirmar_ci_existente" id="confirmar_ci_existente" value="0">
+    <input type="hidden" name="confirmar_alerta_irrf" id="confirmar_alerta_irrf" value="{{ form_data.get('confirmar_alerta_irrf', '0') }}">
+
+    {% if pendencia_documental and pendencia_documental.id %}
+    <div class="section-card warning-panel">
+        <h3 class="section-card-title">Continuidade a partir da pendencia documental</h3>
+        <p class="muted">
+            Esta abertura veio da pendencia {{ pendencia_documental.id }}. O fluxo oficial so segue
+            quando o documento estiver validado automaticamente.
+        </p>
+        <div class="actions">
+            <a class="btn btn-secondary" href="{{ url_for('cadastros.detalhe_pendencia_documental', pendencia_id=pendencia_documental.id) }}">
+                Voltar para a pendencia
+            </a>
+            <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='rpv_pendencia_documento', entidade_id=pendencia_documental.id) }}">
+                Historico da pendencia
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="section-card">
+        <h2 class="section-title">Processo</h2>
+        <div class="form-grid">
+            
+    <div class="form-group">
+        <label for="exercicio">Exercício (mês/ano)</label>
+        <input type="month" id="exercicio" name="exercicio" value="{{ form_data.get('exercicio', '') }}" data-irrf-input="competencia" required>
+        <small class="muted">Esse mês fica como referência cadastral. Se o pagamento ocorrer em outra competência, BI e REINF passam a seguir a data do pagamento.</small>
+    </div>
+
+            <div class="form-group">
+                <label for="processo_edoc">Processo e-Doc / C.I.</label>
+                <input type="text" id="processo_edoc" name="processo_edoc" value="{{ form_data.get('processo_edoc', '') }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="numero_processo">Número do processo</label>
+                <input type="text" id="numero_processo" name="numero_processo" value="{{ form_data.get('numero_processo', '') }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="data_ci">Data da C.I.</label>
+                <input type="date" id="data_ci" name="data_ci" value="{{ form_data.get('data_ci', '') }}" required>
+            </div>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2 class="section-title">Beneficiário</h2>
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="tipo_rpv_id">Tipo de RPV</label>
+                <select id="tipo_rpv_id" name="tipo_rpv_id" required>
+                    <option value="">Selecione</option>
+                    {% for tipo in tipos_rpv %}
+                        <option value="{{ tipo.id }}" {% if form_data.get('tipo_rpv_id') == tipo.id|string %}selected{% endif %}>
+                            {{ tipo.nome }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group full-width">
+                <label for="nome_beneficiario">Nome do beneficiário</label>
+                <input type="text" id="nome_beneficiario" name="nome_beneficiario" value="{{ form_data.get('nome_beneficiario', '') }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="tipo_documento">Tipo de documento</label>
+                <select id="tipo_documento" name="tipo_documento" data-irrf-input="tipo_documento" required>
+                    <option value="CPF" {% if form_data.get('tipo_documento', 'CPF') == 'CPF' %}selected{% endif %}>CPF</option>
+                    <option value="CNPJ" {% if form_data.get('tipo_documento') == 'CNPJ' %}selected{% endif %}>CNPJ</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="documento_original">Documento</label>
+                <input type="text" id="documento_original" name="documento_original" value="{{ form_data.get('documento_original', '') }}" data-irrf-input="documento">
+                <small class="muted">Se o CPF/CNPJ ainda nao foi encontrado, deixe em branco. O caso fica salvo em Documentos pendentes, fora do fluxo oficial.</small>
+            </div>
+
+            <div class="form-group full-width">
+                <label for="elaborador_id">Responsável operacional</label>
+                <select id="elaborador_id" name="elaborador_id" required>
+                    {% set responsavel_selecionado = form_data.get('elaborador_id', current_user.id|string) %}
+                    {% for usuario in usuarios %}
+                        <option value="{{ usuario.id }}" {% if responsavel_selecionado == usuario.id|string %}selected{% endif %}>
+                            {{ usuario.nome }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <small class="muted">
+                    O cadastro ficará registrado no seu usuário, mas o acompanhamento passará para o responsável escolhido.
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2 class="section-title">Financeiro</h2>
+        <div class="form-grid-3">
+            <div class="form-group">
+                <label for="valor_bruto">Valor bruto</label>
+                <input type="text" id="valor_bruto" name="valor_bruto" value="{{ form_data.get('valor_bruto', '') }}" data-irrf-input="valor_bruto" required>
+            </div>
+
+            <div class="form-group">
+                <label for="valor_irrf">Valor IRRF</label>
+                <input type="text" id="valor_irrf" name="valor_irrf" value="{{ form_data.get('valor_irrf', '') }}" data-irrf-input="valor_irrf">
+            </div>
+
+            <div class="form-group full-width">
+                <div class="irrf-assist-header">
+                    <div class="irrf-assist-copy">
+                        <span class="irrf-assist-title">Calculo assistido</span>
+                        <p class="muted stacked-flow-note">Usa a regra operacional de 2026, preenche o campo e mantem tudo editavel antes de salvar.</p>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm" data-irrf-action="calculate">
+                        Calcular IRRF sugerido
+                    </button>
+                </div>
+                <div class="irrf-calc-panel" data-irrf-panel role="status" aria-live="polite" hidden></div>
+            </div>
+
+            <div class="form-group full-width">
+                <label class="checkbox-inline" for="sem_irrf">
+                    <input
+                        type="checkbox"
+                        id="sem_irrf"
+                        name="sem_irrf"
+                        value="1"
+                        data-irrf-input="sem_irrf"
+                        {% if form_data.get('sem_irrf') == '1' %}checked{% endif %}
+                    >
+                    <span>
+                        <strong>Marcar este RPV normal como sem IRRF</strong><br>
+                        <span class="muted">Use apenas quando esse tipo de RPV realmente não tiver retenção. Valor zerado sozinho não marca sem IRRF nem retira o registro da REINF.</span>
+                    </span>
+                </label>
+            </div>
+
+            <div class="readonly-box full-width">
+                <strong>Pagamento lançado depois</strong><br>
+                A data do pagamento principal e a data do pagamento do IRRF ficam na tela de andamento do RPV, conforme o fluxo real de trabalho.
+            </div>
+        </div>
+
+        {% if contexto_processo_existente %}
+        <div class="flash flash-info">
+            <strong>Atenção:</strong> este processo já existe no sistema.<br>
+            <strong>Responsável:</strong> {{ contexto_processo_existente.responsavel }}<br>
+            <strong>Situação do RPV:</strong> {{ contexto_processo_existente.situacao_empenho }}<br>
+            <strong>Situação do IRRF:</strong> {{ contexto_processo_existente.situacao_imposto }}<br>
+            <strong>Resumo operacional:</strong> {{ contexto_processo_existente.resumo_operacional }}<br><br>
+
+            {% if contexto_processo_existente.registro_id %}
+                <a class="btn btn-secondary" href="{{ url_for('cadastros.editar_rpv', registro_id=contexto_processo_existente.registro_id) }}">
+                    Abrir existente
+                </a>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if alerta_irrf %}
+        <div class="flash flash-danger">
+            <strong>Atenção fiscal:</strong> este lançamento está acima de R$ 5.040,00 e pertence a um tipo que costuma exigir conferência de IRRF.<br>
+            Revise antes de continuar. Se ainda assim quiser manter o lançamento, confirme manualmente.
+        </div>
+        {% endif %}
+
+        {% if ocorrencias_processo %}
+        <div class="section-card warning-panel">
+            <h3 class="section-card-title">Processo já encontrado no sistema</h3>
+            <p class="muted">
+                O número do processo informado já aparece em outros registros. Confira abaixo antes de continuar.
+            </p>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Origem</th>
+                            <th>Responsável</th>
+                            <th>Situação do RPV</th>
+                            <th>Situação do IRRF</th>
+                            <th>Resumo operacional</th>
+                            <th>Abrir</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for ocorrencia in ocorrencias_processo %}
+                        <tr>
+                            <td>{{ ocorrencia.origem }}</td>
+                            <td>{{ ocorrencia.responsavel }}</td>
+                            <td>{{ ocorrencia.situacao_rpv }}</td>
+                            <td>{{ ocorrencia.situacao_irrf }}</td>
+                            <td>{{ ocorrencia.resumo_operacional }}</td>
+                            <td>
+                                {% if ocorrencia.abrir_url %}
+                                    <a class="btn btn-secondary btn-sm" href="{{ ocorrencia.abrir_url }}">Abrir</a>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="content-top-14">
+                <button
+                    type="submit"
+                    class="btn"
+                    onclick="document.getElementById('confirmar_processo_existente').value='1';"
+                >
+                    Confirmar e continuar mesmo assim
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if registros_mesma_ci %}
+        <div class="section-card warning-panel">
+            <h3 class="section-card-title">C.I./eDOC jÃ¡ encontrada em outros RPVs normais</h3>
+            <p class="muted">
+                A mesma C.I./eDOC ja aparece em outros processos. Isso pode ser legitimo quando uma unica C.I. traz mais de um RPV normal,
+                mas exige conferencia antes de continuar.
+            </p>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Processo</th>
+                            <th>Beneficiario</th>
+                            <th>Responsavel</th>
+                            <th>Situacao do RPV</th>
+                            <th>Situacao do IRRF</th>
+                            <th>Abrir</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for registro_ci in registros_mesma_ci %}
+                        <tr>
+                            <td>{{ registro_ci.processo.numero_processo if registro_ci.processo else '-' }}</td>
+                            <td>{{ registro_ci.nome_beneficiario }}</td>
+                            <td>{{ registro_ci.elaborador.nome if registro_ci.elaborador else '-' }}</td>
+                            <td>{{ registro_ci.situacao_empenho.nome if registro_ci.situacao_empenho else '-' }}</td>
+                            <td>{{ registro_ci.situacao_imposto.nome if registro_ci.situacao_imposto else '-' }}</td>
+                            <td>
+                                <a class="btn btn-secondary btn-sm" href="{{ url_for('cadastros.editar_rpv', registro_id=registro_ci.id) }}">Abrir</a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="content-top-14">
+                <button
+                    type="submit"
+                    class="btn"
+                    onclick="document.getElementById('confirmar_ci_existente').value='1';"
+                >
+                    Confirmar C.I./eDOC repetida e continuar
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="form-actions">
+            <a class="btn btn-secondary" href="{{ url_for('cadastros.lista_rpvs') }}">Cancelar</a>
+
+            <button type="submit" class="btn">
+                Salvar cadastro
+            </button>
+
+            {% if contexto_processo_existente %}
+            <button
+                type="submit"
+                class="btn btn-secondary"
+                onclick="document.getElementById('confirmar_processo_existente').value='1';"
+            >
+                Confirmar processo repetido e continuar
+            </button>
+            {% endif %}
+
+            {% if registros_mesma_ci %}
+            <button
+                type="submit"
+                class="btn btn-secondary"
+                onclick="document.getElementById('confirmar_ci_existente').value='1';"
+            >
+                Confirmar C.I./eDOC repetida e continuar
+            </button>
+            {% endif %}
+
+            {% if alerta_irrf %}
+            <button
+                type="submit"
+                class="btn btn-secondary"
+                onclick="document.getElementById('confirmar_alerta_irrf').value='1';"
+            >
+                Confirmar pendência de IRRF e continuar
+            </button>
+            {% endif %}
+        </div>
+    </div>
+</form>
+{% endblock %}

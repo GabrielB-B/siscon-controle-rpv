@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}RPVs dativos - Editar beneficiário do lote{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Editar beneficiário do lote sem IRRF{% endblock %}
+
+{% block content %}
+{% set dispensa_irrf_confirmada = form_data.get('dispensa_irrf_confirmada', '1' if item.dispensa_irrf_confirmada else '0') == '1' %}
+{% set revisao_irrf_pendente = item.requer_conferencia_irrf_sem_retencao and not dispensa_irrf_confirmada %}
+<div class="page-header">
+    <div>
+        <h1>Editar beneficiário do lote</h1>
+        <p class="muted">Aqui você ajusta somente os dados básicos vindos da planilha.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='dativo_item', entidade_id=item.id) }}">Histórico</a>
+        <a class="btn btn-secondary" href="{{ url_retorno }}">Retornar</a>
+    </div>
+</div>
+
+<div class="section-card content-card-narrow">
+    <form method="POST" action="{{ url_for('dativos.editar_item_lote', lote_id=lote.id, item_id=item.id, retorno=url_retorno) }}">
+        {{ csrf_input() }}
+        <input
+            type="hidden"
+            name="confirmar_processo_existente"
+            id="confirmar_processo_existente"
+            value="{{ form_data.get('confirmar_processo_existente', '0') }}"
+        >
+        <input
+            type="hidden"
+            name="confirmar_edicao_valor_bruto"
+            value="{{ form_data.get('confirmar_edicao_valor_bruto', '0') }}"
+        >
+        <div class="form-group">
+            <label for="nome_beneficiario">Nome</label>
+            <input type="text" id="nome_beneficiario" name="nome_beneficiario" value="{{ form_data.get('nome_beneficiario', item.nome_beneficiario) }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="cpf_original">CPF/CNPJ</label>
+            <input type="text" id="cpf_original" name="cpf_original" value="{{ form_data.get('cpf_original', item.cpf_original) }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="numero_processo">Processo</label>
+            <input type="text" id="numero_processo" name="numero_processo" value="{{ form_data.get('numero_processo', item.numero_processo) }}" required>
+        </div>
+
+        <div
+            class="form-group"
+            data-sensitive-value-edit
+            data-sensitive-value-title="Confirmar edicao do valor bruto"
+            data-sensitive-value-message="Alterar o valor bruto depois do cadastro recalcula os totais do lote e fica registrado no historico. Deseja liberar a edicao?"
+        >
+            <label for="valor_bruto">Valor bruto</label>
+            <div class="sensitive-value-control">
+                <input
+                    type="text"
+                    id="valor_bruto"
+                    name="valor_bruto"
+                    value="{{ form_data.get('valor_bruto', item.valor_bruto) }}"
+                    data-sensitive-value-input
+                    data-initial-value="{{ item.valor_bruto }}"
+                    readonly
+                    required
+                >
+                <button type="button" class="btn btn-secondary btn-sm" data-sensitive-value-action>
+                    Editar valor bruto
+                </button>
+            </div>
+            <small class="muted">Use apenas para corrigir erro de cadastro. A alteracao fica registrada no historico.</small>
+        </div>
+
+        {% if item.requer_conferencia_irrf_sem_retencao or dispensa_irrf_confirmada %}
+        <div class="hint-box {% if revisao_irrf_pendente %}warning-panel{% endif %} content-top-14">
+            <strong>Conferencia fiscal do beneficiario</strong><br>
+            {% if revisao_irrf_pendente %}
+                Este beneficiario esta no corte operacional de IRRF para revisao. Verifique se ele deve sair do lote sem IRRF ou confirme abaixo quando a permanencia estiver correta.
+            {% else %}
+                A dispensa de IRRF deste beneficiario ja foi confirmada para este caso. Desmarque abaixo se precisar recolocar a pendencia em revisao.
+            {% endif %}
+
+            <label class="checkbox-inline content-top-14" for="dispensa_irrf_confirmada">
+                <input
+                    type="checkbox"
+                    id="dispensa_irrf_confirmada"
+                    name="dispensa_irrf_confirmada"
+                    value="1"
+                    {% if dispensa_irrf_confirmada %}checked{% endif %}
+                >
+                <span>
+                    <strong>Confirmo que este beneficiario realmente nao tem retencao de IRRF neste caso</strong><br>
+                    <span class="muted">Use quando a permanencia no lote sem IRRF estiver correta, como em CNPJ ou outra hipotese sem retencao.</span>
+                </span>
+            </label>
+        </div>
+        {% endif %}
+
+        {% if ocorrencias_processo %}
+        <div class="section-card warning-panel content-top-14">
+            <h3 class="section-card-title">Processo já encontrado no sistema</h3>
+            <p class="muted">
+                O número do processo informado já aparece em outros registros. Confira abaixo antes de continuar.
+            </p>
+
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Origem</th>
+                        <th>Responsável</th>
+                        <th>Situação do RPV</th>
+                        <th>Situação do IRRF</th>
+                        <th>Resumo operacional</th>
+                        <th>Abrir</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ocorrencia in ocorrencias_processo %}
+                    <tr>
+                        <td>{{ ocorrencia.origem }}</td>
+                        <td>{{ ocorrencia.responsavel }}</td>
+                        <td>{{ ocorrencia.situacao_rpv }}</td>
+                        <td>{{ ocorrencia.situacao_irrf }}</td>
+                        <td>{{ ocorrencia.resumo_operacional }}</td>
+                        <td>
+                            {% if ocorrencia.abrir_url %}
+                                <a class="btn btn-secondary btn-sm" href="{{ ocorrencia.abrir_url }}">Abrir</a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <div class="content-top-14">
+                <button
+                    type="submit"
+                    class="btn"
+                    onclick="document.getElementById('confirmar_processo_existente').value='1';"
+                >
+                    Confirmar e continuar mesmo assim
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="form-actions">
+            <a class="btn btn-secondary" href="{{ url_retorno }}">Cancelar</a>
+            <button type="submit">Salvar alterações</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+
+{% block title %}Andamento do RPV{% endblock %}
+{% block topbar_title %}Andamento do RPV{% endblock %}
+{% block topbar_subtitle %}Atualização posterior do processo{% endblock %}
+
+{% block content %}
+{% import "components/value_display.html" as values %}
+
+<div class="page-header">
+    <div>
+        <h1>Andamento do RPV</h1>
+        <p class="muted">Atualize os dados do registro, do pagamento principal e do pagamento do IRRF.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='registro_rpv', entidade_id=registro.id) }}">Histórico</a>
+        <a class="btn btn-secondary" href="{{ url_retorno }}">Retornar</a>
+    </div>
+</div>
+
+<div class="section-card">
+        <h2 class="section-card-title">Resumo do processo</h2>
+    <div class="form-grid">
+        <div class="readonly-box">
+            <strong>Cadastrado por</strong><br>
+            {{ registro.criado_por.nome if registro.criado_por else '-' }}
+        </div>
+        <div class="readonly-box">
+            <strong>Elaborador responsável</strong><br>
+            {{ registro.elaborador.nome if registro.elaborador else '-' }}
+        </div>
+        <div class="readonly-box">
+            <strong>Processo e-Doc / C.I.</strong><br>
+            {{ processo.processo_edoc }}
+        </div>
+        <div class="readonly-box">
+            <strong>Número do processo</strong><br>
+            {{ processo.numero_processo }}
+        </div>
+        <div class="readonly-box">
+            <strong>Data da C.I.</strong><br>
+            {{ processo.data_ci.strftime('%d/%m/%Y') if processo.data_ci else '' }}
+        </div>
+        <div class="readonly-box">
+            <strong>Data de cadastro</strong><br>
+            {{ processo.data_cadastro.strftime('%d/%m/%Y %H:%M') if processo.data_cadastro else '' }}
+        </div>
+        <div class="readonly-box full-width">
+            <strong>Resumo operacional</strong><br>
+            {{ registro.historico_auto }}
+        </div>
+
+        <div class="readonly-box full-width">
+            <strong>Transferir responsabilidade</strong><br>
+            <form
+                method="POST"
+                action="{{ url_for('cadastros.transferir_responsavel_rpv', registro_id=registro.id, retorno=url_retorno) }}"
+                class="content-top-14"
+                onsubmit="return confirm('Transferir a responsabilidade deste RPV para o usuário selecionado?');"
+            >
+                {{ csrf_input() }}
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="elaborador_id_transferencia">Novo responsável</label>
+                        <select id="elaborador_id_transferencia" name="elaborador_id" required>
+                            {% for usuario in usuarios %}
+                                <option value="{{ usuario.id }}" {% if registro.elaborador_id == usuario.id %}selected{% endif %}>
+                                    {{ usuario.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-secondary">Transferir responsabilidade</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<form
+    method="POST"
+    data-irrf-calculator
+    data-irrf-calc-url="{{ url_for('cadastros.calcular_irrf_sugerido') }}"
+    data-payment-date-confirm="true"
+    data-payment-date-title="Confirmar data manual de pagamento"
+    data-payment-date-message="Voce alterou manualmente a data do pagamento principal. BI, competencia operacional e a fila mensal da REINF passarao a seguir essa data. Deseja continuar?"
+    data-payment-date-submit-label="Confirmar data manual"
+>
+    {{ csrf_input() }}
+    <input type="hidden" name="confirmar_data_pagamento_manual" value="0">
+    <input type="hidden" name="confirmar_edicao_valor_bruto" value="0">
+    <div class="section-card">
+        <h2 class="section-card-title">Dados principais</h2>
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="exercicio">Exercício base (mês/ano)</label>
+                <input type="month" id="exercicio" name="exercicio" value="{{ processo.exercicio_input_value }}" data-irrf-input="competencia" required>
+                <small class="muted">O exercício permanece como referência cadastral. Quando houver pagamento, BI e REINF seguem a data do pagamento confirmada.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="tipo_rpv_id">Tipo de RPV</label>
+                <select id="tipo_rpv_id" name="tipo_rpv_id" required>
+                    {% for tipo in tipos_rpv %}
+                        <option value="{{ tipo.id }}" {% if registro.tipo_rpv_id == tipo.id %}selected{% endif %}>
+                            {{ tipo.nome }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group full-width">
+                <label for="nome_beneficiario">Nome do beneficiário</label>
+                <input type="text" id="nome_beneficiario" name="nome_beneficiario" value="{{ registro.nome_beneficiario }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="tipo_documento">Tipo de documento</label>
+                <select id="tipo_documento" name="tipo_documento" data-irrf-input="tipo_documento" required>
+                    <option value="CPF" {% if registro.tipo_documento == 'CPF' %}selected{% endif %}>CPF</option>
+                    <option value="CNPJ" {% if registro.tipo_documento == 'CNPJ' %}selected{% endif %}>CNPJ</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="documento_original">Documento</label>
+                <input type="text" id="documento_original" name="documento_original" value="{{ registro.documento_original }}" data-irrf-input="documento" required>
+            </div>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2 class="section-card-title">Financeiro</h2>
+        <div class="form-grid-3">
+            <div
+                class="form-group"
+                data-sensitive-value-edit
+                data-sensitive-value-title="Confirmar edicao do valor bruto"
+                data-sensitive-value-message="Alterar o valor bruto depois do cadastro muda o valor liquido, o BI, os relatorios e o historico operacional deste RPV. Deseja liberar a edicao?"
+            >
+                <label for="valor_bruto">Valor bruto</label>
+                <div class="sensitive-value-control">
+                    <input
+                        type="text"
+                        id="valor_bruto"
+                        name="valor_bruto"
+                        value="{{ registro.valor_bruto }}"
+                        data-irrf-input="valor_bruto"
+                        data-sensitive-value-input
+                        data-initial-value="{{ registro.valor_bruto }}"
+                        readonly
+                        required
+                    >
+                    <button type="button" class="btn btn-secondary btn-sm" data-sensitive-value-action>
+                        Editar valor bruto
+                    </button>
+                </div>
+                <small class="muted">Use apenas para corrigir erro de cadastro. A alteracao fica registrada no historico.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="valor_irrf">Valor IRRF</label>
+                <input type="text" id="valor_irrf" name="valor_irrf" value="{{ registro.valor_irrf or '' }}" data-irrf-input="valor_irrf">
+            </div>
+
+            <div class="form-group full-width">
+                <div class="irrf-assist-header">
+                    <div class="irrf-assist-copy">
+                        <span class="irrf-assist-title">Calculo assistido</span>
+                        <p class="muted stacked-flow-note">Refaz a sugestao operacional de 2026 com base no bruto, na competencia e no documento atuais.</p>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm" data-irrf-action="calculate">
+                        Calcular IRRF sugerido
+                    </button>
+                </div>
+                <div class="irrf-calc-panel" data-irrf-panel role="status" aria-live="polite" hidden></div>
+            </div>
+
+            <div class="readonly-box">
+                <strong>Valor líquido atual</strong><br>
+                {{ values.render_value(registro.valor_liquido, 'moeda', 'inline') }}
+            </div>
+
+            <div class="form-group full-width">
+                <label class="checkbox-inline" for="sem_irrf">
+                    <input
+                        type="checkbox"
+                        id="sem_irrf"
+                        name="sem_irrf"
+                        value="1"
+                        data-irrf-input="sem_irrf"
+                        {% if registro.sem_irrf_efetivo %}checked{% endif %}
+                    >
+                    <span>
+                        <strong>Este RPV normal é sem IRRF</strong><br>
+                        <span class="muted">Marque apenas quando este caso realmente não tiver retenção. Valor zerado sozinho não significa sem IRRF.</span>
+                    </span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <div class="workflow-header">
+            <div>
+                <h2 class="section-card-title">Fluxo de pagamento</h2>
+                <p class="muted stacked-flow-note">
+                    A competência operacional e a fila mensal da REINF seguem a data do pagamento principal.
+                    O status da REINF é atualizado somente no módulo REINF.
+                </p>
+            </div>
+        </div>
+
+        <div class="workflow-tabs" role="tablist" aria-label="Fluxo de pagamento">
+            <button
+                type="button"
+                class="workflow-tab is-active"
+                data-tab-target="pagamento-principal"
+                aria-pressed="true"
+            >
+                Pagamento principal
+            </button>
+            {% if not registro.sem_irrf_efetivo %}
+                <button
+                    type="button"
+                    class="workflow-tab"
+                    data-tab-target="pagamento-irrf"
+                    aria-pressed="false"
+                >
+                    Pagamento do IRRF
+                </button>
+            {% endif %}
+        </div>
+
+        <div class="workflow-pane is-active" data-tab-panel="pagamento-principal">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="nota_empenho">Nota de empenho</label>
+                    <input type="text" id="nota_empenho" name="nota_empenho" value="{{ registro.nota_empenho or '' }}">
+                </div>
+
+                <div class="form-group">
+                    <label for="numero_se">SE</label>
+                    <input type="text" id="numero_se" name="numero_se" value="{{ registro.numero_se or '' }}">
+                </div>
+
+                <div class="form-group">
+                    <label for="ordem_bancaria">OB principal</label>
+                    <input type="text" id="ordem_bancaria" name="ordem_bancaria" value="{{ registro.ordem_bancaria or '' }}">
+                </div>
+
+                <div class="hint-box full-width">
+                    NE e OB do pagamento principal são únicas no sistema. Ao marcar como pago ou concluído, os dois campos se tornam obrigatórios e, se houver repetição, o sistema informa onde a referência já está.
+                </div>
+
+                <div class="form-group">
+                    <label for="situacao_empenho_id">Situação do empenho</label>
+                    <select id="situacao_empenho_id" name="situacao_empenho_id" required>
+                        {% for situacao in situacoes_empenho %}
+                            <option value="{{ situacao.id }}" {% if registro.situacao_empenho_id == situacao.id %}selected{% endif %}>
+                                {{ situacao.nome }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="data_pagamento">Data do pagamento principal</label>
+                    <input
+                        type="date"
+                        id="data_pagamento"
+                        name="data_pagamento"
+                        value="{{ registro.data_pagamento_input_value }}"
+                        data-initial-value="{{ registro.data_pagamento_input_value }}"
+                    >
+                    <small class="muted">Ao alterar manualmente essa data, a competencia operacional e a fila mensal da REINF passam a seguir a data confirmada.</small>
+                </div>
+
+                <div class="readonly-box full-width">
+                    <strong>Competência operacional atual</strong><br>
+                    {{ registro.competencia_operacional_formatada or processo.exercicio_input_value or 'Não informada' }}
+                </div>
+
+                {% if registro.sem_irrf_efetivo %}
+                    <div class="readonly-box full-width">
+                        <strong>Fluxo fiscal não se aplica</strong><br>
+                        Este RPV está marcado como sem IRRF, então o andamento fica concentrado apenas no pagamento principal.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if not registro.sem_irrf_efetivo %}
+            <div class="workflow-pane" data-tab-panel="pagamento-irrf" hidden>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="ob_imposto">OB IRRF</label>
+                        <input type="text" id="ob_imposto" name="ob_imposto" value="{{ registro.ob_imposto or '' }}">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="situacao_imposto_id">Situação do imposto</label>
+                        <select id="situacao_imposto_id" name="situacao_imposto_id" required>
+                            {% for situacao in situacoes_imposto %}
+                                <option value="{{ situacao.id }}" {% if registro.situacao_imposto_id == situacao.id %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="data_pagamento_irrf">Data do pagamento do IRRF</label>
+                        <input
+                            type="date"
+                            id="data_pagamento_irrf"
+                            name="data_pagamento_irrf"
+                            value="{{ registro.data_pagamento_irrf_input_value }}"
+                        >
+                    </div>
+
+                    <div class="readonly-box full-width">
+                        <strong>Situação REINF</strong><br>
+                        {{ registro.reinf_status_legivel }}
+                        <br>
+                        <span class="muted">Atualize esse status somente na aba REINF mensal.</span>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="section-card">
+        <h2 class="section-card-title">Observações</h2>
+        <div class="form-grid">
+            <div class="form-group full-width">
+                <label for="observacoes">Observações</label>
+                <textarea id="observacoes" name="observacoes">{{ registro.observacoes or '' }}</textarea>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button type="submit">Salvar alterações</button>
+            <a class="btn btn-secondary" href="{{ url_retorno }}">Cancelar</a>
+        </div>
+    </div>
+</form>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const tabs = Array.from(document.querySelectorAll("[data-tab-target]"));
+        const panes = Array.from(document.querySelectorAll("[data-tab-panel]"));
+
+        function activateTab(target) {
+            tabs.forEach((tab) => {
+                const isActive = tab.dataset.tabTarget === target;
+                tab.classList.toggle("is-active", isActive);
+                tab.setAttribute("aria-pressed", isActive ? "true" : "false");
+            });
+
+            panes.forEach((pane) => {
+                const isActive = pane.dataset.tabPanel === target;
+                pane.classList.toggle("is-active", isActive);
+                pane.hidden = !isActive;
+            });
+        }
+
+        tabs.forEach((tab) => {
+            tab.addEventListener("click", function () {
+                activateTab(tab.dataset.tabTarget);
+            });
+        });
+    });
+</script>
+{% endblock %}

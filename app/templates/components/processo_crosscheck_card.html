@@ -1,0 +1,272 @@
+{% if busca_processo_contexto %}
+{% set processo_crosscheck_scope = processo_crosscheck_scope|default('geral') %}
+{% set processo_crosscheck_grade_vazia = processo_crosscheck_grade_vazia|default(false) %}
+{% set primeiro_dativo = busca_processo_contexto.dativos_relacionados[0] if busca_processo_contexto.dativos_relacionados else None %}
+{% set primeiro_rpv_normal = busca_processo_contexto.rpvs_normais[0] if busca_processo_contexto.rpvs_normais else None %}
+{% set primeira_pendencia = busca_processo_contexto.pendencias_documentais[0] if busca_processo_contexto.pendencias_documentais else None %}
+{% set busca_por_processo = busca_processo_contexto.busca_por_processo|default(true) %}
+<section class="section-card process-crosscheck-card">
+    {% if processo_crosscheck_scope == 'dativos' and primeiro_dativo %}
+        <div class="flash flash-info process-crosscheck-highlight" role="status">
+            <div class="flash-badge" aria-hidden="true">PROC</div>
+            <div class="flash-copy">
+                <strong class="flash-title">
+                    {% if busca_por_processo %}Processo localizado em dativos{% else %}Busca localizada em dativos{% endif %}
+                </strong>
+                <div class="flash-message">
+                    {% if processo_crosscheck_grade_vazia %}
+                        A grade atual não trouxe linhas com os filtros aplicados, mas {{ 'o processo' if busca_por_processo else 'a busca' }}
+                        <strong>{{ busca_processo_contexto.consulta }}</strong>
+                        foi localizado na C.I.
+                        <strong>{{ primeiro_dativo.processo_edoc }}</strong>.
+                    {% else %}
+                        {{ 'O processo' if busca_por_processo else 'A busca' }} <strong>{{ busca_processo_contexto.consulta }}</strong> está vinculado à C.I.
+                        <strong>{{ primeiro_dativo.processo_edoc }}</strong> no módulo de dativos.
+                    {% endif %}
+                    {% if busca_processo_contexto.total_rpvs_normais %}
+                        Também há {{ busca_processo_contexto.total_rpvs_normais }} ocorrência(s) no módulo de RPVs normais.
+                    {% endif %}
+                </div>
+                <div class="process-crosscheck-actions">
+                    {% if primeiro_dativo.abrir_ci_url %}
+                        <a class="btn btn-secondary btn-sm" href="{{ primeiro_dativo.abrir_ci_url }}">Abrir C.I.</a>
+                    {% endif %}
+                    {% if primeiro_dativo.abrir_lote_url %}
+                        <a class="btn btn-sm" href="{{ primeiro_dativo.abrir_lote_url }}">Abrir lote</a>
+                    {% endif %}
+                    {% if primeiro_rpv_normal and primeiro_rpv_normal.abrir_url %}
+                        <a class="btn btn-secondary btn-sm" href="{{ primeiro_rpv_normal.abrir_url }}">Abrir RPV normal</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% elif processo_crosscheck_scope == 'rpvs' and primeira_pendencia %}
+        <div class="flash flash-warning process-crosscheck-highlight" role="status">
+            <div class="flash-badge" aria-hidden="true">PEND</div>
+            <div class="flash-copy">
+                <strong class="flash-title">
+                    {% if busca_por_processo %}Processo em pendência documental{% else %}Busca encontrada em pendências documentais{% endif %}
+                </strong>
+                <div class="flash-message">
+                    {% if processo_crosscheck_grade_vazia %}
+                        Nenhum RPV normal bateu com a consulta atual, mas {{ 'o processo' if busca_por_processo else 'a busca' }}
+                        <strong>{{ busca_processo_contexto.consulta }}</strong>
+                        está aguardando correção documental em pendências.
+                    {% else %}
+                        {{ 'Esse processo' if busca_por_processo else 'Essa busca' }} também aparece em pendências documentais e ainda não entrou no fluxo oficial.
+                    {% endif %}
+                </div>
+                <div class="process-crosscheck-actions">
+                    {% if primeira_pendencia.abrir_url %}
+                        <a class="btn btn-secondary btn-sm" href="{{ primeira_pendencia.abrir_url }}">Abrir pendência</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% elif processo_crosscheck_scope == 'rpvs' and primeiro_dativo %}
+        <div class="flash flash-info process-crosscheck-highlight" role="status">
+            <div class="flash-badge" aria-hidden="true">PROC</div>
+            <div class="flash-copy">
+                <strong class="flash-title">
+                    {% if busca_por_processo %}Processo encontrado em dativos{% else %}Busca encontrada em dativos{% endif %}
+                </strong>
+                <div class="flash-message">
+                    {% if processo_crosscheck_grade_vazia %}
+                        Nenhum RPV normal bateu com a consulta atual, mas {{ 'o processo' if busca_por_processo else 'a busca' }}
+                        <strong>{{ busca_processo_contexto.consulta }}</strong>
+                        foi localizado em dativos na C.I.
+                        <strong>{{ primeiro_dativo.processo_edoc }}</strong>.
+                    {% else %}
+                        {{ 'Esse processo' if busca_por_processo else 'Essa busca' }} também aparece no módulo de dativos, na C.I.
+                        <strong>{{ primeiro_dativo.processo_edoc }}</strong>.
+                    {% endif %}
+                </div>
+                <div class="process-crosscheck-actions">
+                    {% if primeiro_dativo.abrir_ci_url %}
+                        <a class="btn btn-secondary btn-sm" href="{{ primeiro_dativo.abrir_ci_url }}">Abrir C.I.</a>
+                    {% endif %}
+                    {% if primeiro_dativo.abrir_lote_url %}
+                        <a class="btn btn-sm" href="{{ primeiro_dativo.abrir_lote_url }}">Abrir lote</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% elif processo_crosscheck_scope == 'dativos' and primeiro_rpv_normal %}
+        <div class="flash flash-info process-crosscheck-highlight" role="status">
+            <div class="flash-badge" aria-hidden="true">PROC</div>
+            <div class="flash-copy">
+                <strong class="flash-title">
+                    {% if busca_por_processo %}Processo encontrado em RPVs normais{% else %}Busca encontrada em RPVs normais{% endif %}
+                </strong>
+                <div class="flash-message">
+                    {{ 'O processo' if busca_por_processo else 'A busca' }} <strong>{{ busca_processo_contexto.consulta }}</strong> também possui ocorrência no módulo principal de RPVs.
+                </div>
+                <div class="process-crosscheck-actions">
+                    {% if primeiro_rpv_normal.abrir_url %}
+                        <a class="btn btn-secondary btn-sm" href="{{ primeiro_rpv_normal.abrir_url }}">Abrir RPV normal</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">
+                {% if busca_por_processo %}Busca cruzada por processo{% else %}Busca cruzada no sistema{% endif %}
+            </p>
+            <h2>
+                {% if busca_por_processo %}Contexto do processo{% else %}Onde aparece{% endif %}
+                {{ busca_processo_contexto.consulta }}
+            </h2>
+            <p class="section-caption">
+                A pesquisa principal continua na grade abaixo. Este quadro mostra em quais pontos do sistema {{ 'o processo aparece' if busca_por_processo else 'a busca aparece' }}, com foco nas C.I.s e nos lotes de dativos relacionados.
+            </p>
+        </div>
+    </div>
+
+    <div class="summary-grid">
+        <div class="readonly-box">
+            <strong>Ocorrências totais</strong><br>
+            {{ busca_processo_contexto.total_ocorrencias }}
+        </div>
+        <div class="readonly-box">
+            <strong>C.I.s de dativo</strong><br>
+            {{ busca_processo_contexto.total_cis_dativos }}
+        </div>
+        <div class="readonly-box">
+            <strong>Vínculos em dativos</strong><br>
+            {{ busca_processo_contexto.total_dativo_ocorrencias }}
+        </div>
+        <div class="readonly-box">
+            <strong>RPVs normais</strong><br>
+            {{ busca_processo_contexto.total_rpvs_normais }}
+        </div>
+        <div class="readonly-box">
+            <strong>Pendências documentais</strong><br>
+            {{ busca_processo_contexto.total_pendencias_documentais }}
+        </div>
+    </div>
+
+    {% if busca_processo_contexto.pendencias_documentais %}
+        <div class="content-top-18">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Pendências documentais</p>
+                    <h2>Cadastros guardados fora do fluxo oficial</h2>
+                </div>
+            </div>
+
+            <div class="stack-list">
+                {% for ocorrencia in busca_processo_contexto.pendencias_documentais %}
+                    <article class="stack-item">
+                        <div>
+                            <h4>{{ ocorrencia.beneficiario }}</h4>
+                            <div class="stack-meta">
+                                {{ ocorrencia.tipo }} | {{ ocorrencia.responsavel }} | {{ ocorrencia.situacao_rpv }}
+                            </div>
+                            <div class="stack-meta">{{ ocorrencia.resumo_operacional }}</div>
+                            {% if ocorrencia.criterios %}
+                                <div class="stack-meta">Localizado por: {{ ocorrencia.criterios|join(', ') }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="actions-inline">
+                            {% if ocorrencia.abrir_url %}
+                                <a class="btn btn-secondary btn-sm" href="{{ ocorrencia.abrir_url }}">Abrir pendência</a>
+                            {% endif %}
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+
+    {% if busca_processo_contexto.dativos_relacionados %}
+        <div class="content-top-18">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">RPVs dativos</p>
+                    <h2>C.I.s e lotes relacionados</h2>
+                </div>
+            </div>
+
+            <div class="stack-list">
+                {% for ci in busca_processo_contexto.dativos_relacionados %}
+                    <article class="stack-item">
+                        <div>
+                            <h3>C.I. {{ ci.processo_edoc }}</h3>
+                            <div class="stack-meta">
+                                Exercício {{ ci.exercicio or '-' }} | {{ ci.total_ocorrencias }} ocorrência(s) {{ 'do processo' if busca_por_processo else 'da busca' }}
+                            </div>
+                            <div class="stack-meta">
+                                {% if ci.total_itens_sem_irrf %}
+                                    {{ ci.total_itens_sem_irrf }} vínculo(s) em lote sem IRRF
+                                {% endif %}
+                                {% if ci.total_itens_sem_irrf and ci.total_itens_com_irrf %} | {% endif %}
+                                {% if ci.total_itens_com_irrf %}
+                                    {{ ci.total_itens_com_irrf }} item(ns) com IRRF
+                                {% endif %}
+                            </div>
+
+                            {% if ci.exemplos %}
+                                <div class="summary-meta-row">
+                                    {% for exemplo in ci.exemplos %}
+                                        <span class="summary-meta-pill">{{ exemplo }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                            {% if ci.criterios %}
+                                <div class="stack-meta">Localizado por: {{ ci.criterios|join(', ') }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="actions-inline">
+                            {% if ci.abrir_ci_url %}
+                                <a class="btn btn-secondary btn-sm" href="{{ ci.abrir_ci_url }}">Abrir C.I.</a>
+                            {% endif %}
+                            {% if ci.abrir_lote_url %}
+                                <a class="btn btn-sm" href="{{ ci.abrir_lote_url }}">Abrir lote</a>
+                            {% endif %}
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+
+    {% if busca_processo_contexto.rpvs_normais %}
+        <div class="content-top-18">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">RPVs normais</p>
+                    <h2>Ocorrências no módulo principal</h2>
+                </div>
+            </div>
+
+            <div class="stack-list">
+                {% for ocorrencia in busca_processo_contexto.rpvs_normais %}
+                    <article class="stack-item">
+                        <div>
+                            <h4>{{ ocorrencia.beneficiario }}</h4>
+                            <div class="stack-meta">
+                                {{ ocorrencia.tipo }} | {{ ocorrencia.responsavel }}
+                            </div>
+                            <div class="stack-meta">{{ ocorrencia.resumo_operacional }}</div>
+                            {% if ocorrencia.criterios %}
+                                <div class="stack-meta">Localizado por: {{ ocorrencia.criterios|join(', ') }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="actions-inline">
+                            {% if ocorrencia.abrir_url %}
+                                <a class="btn btn-secondary btn-sm" href="{{ ocorrencia.abrir_url }}">Abrir RPV</a>
+                            {% endif %}
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+</section>
+{% endif %}

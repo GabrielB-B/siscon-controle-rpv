@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+
+{% block title %}RPVs dativos - Lote sem IRRF{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Detalhe operacional do lote sem IRRF{% endblock %}
+
+{% block content %}
+{% import "components/value_display.html" as values %}
+
+<div class="page-header">
+    <div>
+        <h1>Detalhe do lote sem IRRF</h1>
+        <p class="muted">Resumo do lote, andamento geral e conferência dos beneficiários importados.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='dativo_lote', entidade_id=lote.id) }}">Histórico</a>
+        <a class="btn btn-secondary" href="{{ url_retorno }}">Retornar</a>
+        <a class="btn" href="{{ url_for('dativos.detalhe_ci', ci_id=lote.dativo_ci.id, retorno=url_retorno) }}">Abrir C.I.</a>
+        <a class="btn btn-secondary" href="{{ url_for('dativos.novo_item_lote', lote_id=lote.id, retorno=url_for('dativos.detalhe_lote_sem_irrf', lote_id=lote.id, retorno=url_retorno)) }}">Adicionar beneficiário</a>
+    </div>
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Resumo do lote</h2>
+    <div class="summary-grid">
+        <div class="readonly-box">
+            <strong>Exercício</strong><br>
+            {{ lote.dativo_ci.exercicio_formatado }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>C.I.</strong><br>
+            {{ lote.dativo_ci.processo_edoc }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Data da C.I.</strong><br>
+            {{ lote.dativo_ci.data_ci.strftime('%d/%m/%Y') if lote.dativo_ci.data_ci else '-' }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Data de pagamento</strong><br>
+            {{ lote.data_pagamento.strftime('%d/%m/%Y') if lote.data_pagamento else '-' }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Cadastrado por</strong><br>
+            {{ lote.criado_por.nome if lote.criado_por else '-' }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Responsável operacional</strong><br>
+            {{ lote.responsavel.nome if lote.responsavel else '-' }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Resumo operacional</strong><br>
+            {{ lote.resumo_operacional }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Quantidade de itens</strong><br>
+            {{ lote.quantidade_itens }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Valor bruto total</strong><br>
+            {{ values.render_value(lote.valor_total_bruto, 'moeda', 'inline') }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>IRRF total</strong><br>
+            {{ values.render_value(lote.valor_total_irrf, 'moeda', 'inline') }}
+        </div>
+
+        <div class="readonly-box">
+            <strong>Líquido total</strong><br>
+            {{ values.render_value(lote.valor_total_liquido, 'moeda', 'inline') }}
+        </div>
+    </div>
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Andamento do lote</h2>
+
+    <form
+        method="POST"
+        action="{{ url_for('dativos.salvar_lote_sem_irrf', lote_id=lote.id, retorno=url_retorno) }}"
+        data-payment-date-confirm="true"
+        data-payment-date-title="Confirmar data manual de pagamento"
+        data-payment-date-message="Voce alterou manualmente a data do pagamento. BI e competencia operacional passarao a seguir essa data. Deseja continuar?"
+        data-payment-date-submit-label="Confirmar data manual"
+    >
+        {{ csrf_input() }}
+        <input type="hidden" name="confirmar_data_pagamento_manual" value="0">
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="nota_empenho">NE</label>
+                <input type="text" id="nota_empenho" name="nota_empenho" value="{{ lote.nota_empenho or '' }}">
+            </div>
+
+            <div class="form-group">
+                <label for="numero_se">SE</label>
+                <input type="text" id="numero_se" name="numero_se" value="{{ lote.numero_se or '' }}">
+            </div>
+
+            <div class="form-group">
+                <label for="ordem_bancaria">OB</label>
+                <input type="text" id="ordem_bancaria" name="ordem_bancaria" value="{{ lote.ordem_bancaria or '' }}">
+            </div>
+
+            <div class="hint-box full-width">
+                Este é o único fluxo em que todos os beneficiários do próprio lote compartilham a mesma NE e a mesma OB. Fora desse lote, as referências continuam únicas no sistema e passam a ser obrigatórias ao marcar como pago ou concluído.
+            </div>
+
+            <div class="form-group">
+                <label for="data_pagamento">Data de pagamento</label>
+                <input
+                    type="date"
+                    id="data_pagamento"
+                    name="data_pagamento"
+                    value="{{ lote.data_pagamento_input_value }}"
+                    data-initial-value="{{ lote.data_pagamento_input_value }}"
+                >
+                <small class="muted">Sem data manual, o sistema usa automaticamente o mes atual quando o lote for marcado como pago ou concluido.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="situacao_rpv_id">Situação do RPV</label>
+                <select id="situacao_rpv_id" name="situacao_rpv_id">
+                    {% for situacao in situacoes_rpv %}
+                        <option value="{{ situacao.id }}" {% if lote.situacao_rpv_id == situacao.id %}selected{% endif %}>
+                            {{ situacao.nome }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="readonly-box">
+                <strong>Fluxo do IRRF</strong><br>
+                Sem IRRF
+            </div>
+
+            <div class="form-group full-width">
+                <label for="observacoes">Observações</label>
+                <textarea id="observacoes" name="observacoes">{{ lote.observacoes or '' }}</textarea>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button type="submit">Salvar lote</button>
+        </div>
+    </form>
+</div>
+
+<details class="section-card lot-beneficiaries-toggle">
+    <summary class="details-summary lot-beneficiaries-summary">
+        <div class="lot-beneficiaries-summary-main">
+            <div>
+                <h2 class="section-card-title">Beneficiários do lote</h2>
+                <p class="muted stacked-flow-note">
+                    Abra esta seção para conferir, ajustar ou incluir beneficiários.
+                </p>
+            </div>
+            <span class="summary-meta-pill lot-beneficiaries-count">
+                {{ itens|length }} {{ 'beneficiário' if itens|length == 1 else 'beneficiários' }}
+            </span>
+        </div>
+    </summary>
+
+    <div class="lot-beneficiaries-body">
+        <div class="inline-cluster-between">
+            <p class="muted stacked-flow-note lot-beneficiaries-copy">
+                Aqui ficam apenas os dados essenciais da planilha para conferência e ajuste.
+            </p>
+
+            <a class="btn btn-secondary btn-sm" href="{{ url_for('dativos.novo_item_lote', lote_id=lote.id, retorno=url_for('dativos.detalhe_lote_sem_irrf', lote_id=lote.id, retorno=url_retorno)) }}">
+                Incluir mais um item
+            </a>
+        </div>
+
+        <div class="table-wrap content-top-18">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>CPF/CNPJ</th>
+                        <th>Processo</th>
+                        <th>Valor bruto</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in itens %}
+                    <tr>
+                        <td>
+                            <span class="beneficiary-name-cell">
+                                <span>{{ item.nome_beneficiario }}</span>
+                                {% if item.alerta_irrf_sem_retencao_pendente %}
+                                    <span
+                                        class="beneficiary-alert-marker"
+                                        title="Valor no corte operacional de IRRF. Revise este beneficiario ou confirme a dispensa na edicao."
+                                        aria-label="Pendencia de IRRF para revisao"
+                                    >!</span>
+                                {% endif %}
+                            </span>
+                        </td>
+                        <td>{{ item.documento_formatado }}</td>
+                        <td>{{ item.numero_processo }}</td>
+                        <td>{{ values.render_value(item.valor_bruto, 'moeda', 'compact') }}</td>
+                        <td>
+                            <div class="inline-cluster-sm">
+                                <a class="btn btn-secondary btn-sm" href="{{ url_for('dativos.editar_item_lote', lote_id=lote.id, item_id=item.id, retorno=url_for('dativos.detalhe_lote_sem_irrf', lote_id=lote.id, retorno=url_retorno)) }}">
+                                    Editar
+                                </a>
+                                <a class="btn btn-secondary btn-sm" href="{{ url_for('historico.detalhe', entidade_tipo='dativo_item', entidade_id=item.id) }}">
+                                    Histórico
+                                </a>
+
+                                <form
+                                    method="POST"
+                                    action="{{ url_for('dativos.excluir_item_lote', lote_id=lote.id, item_id=item.id, retorno=url_for('dativos.detalhe_lote_sem_irrf', lote_id=lote.id, retorno=url_retorno)) }}"
+                                    class="form-reset"
+                                    onsubmit="return confirm('Deseja excluir este beneficiário do lote?');"
+                                >
+                                    {{ csrf_input() }}
+                                    <button type="submit" class="btn btn-danger btn-sm">Excluir</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5">Nenhum item encontrado neste lote.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</details>
+{% endblock %}

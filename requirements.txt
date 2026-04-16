@@ -1,0 +1,13 @@
+Flask
+Flask-SQLAlchemy
+Flask-Migrate
+Flask-Login
+python-dotenv
+Unidecode
+openpyxl
+pandas
+odfpy
+PyMySQL
+waitress
+cryptography
+pytest

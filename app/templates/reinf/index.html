@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}REINF - SISCON{% endblock %}
+{% block topbar_title %}REINF{% endblock %}
+{% block topbar_subtitle %}Fila mensal de declaracao por pagamento realizado{% endblock %}
+
+{% block content %}
+{% set status_reinf_padrao = reinf_status_filtros[1][0] if reinf_status_filtros|length > 1 else filtro_reinf_status %}
+{% set filtros_abertos_operacional = filtro_busca or filtro_responsavel != 'todos' or filtro_reinf_status != status_reinf_padrao or filtro_competencia != competencia_padrao or ordenar_atual != 'beneficiario' or direcao_atual != 'asc' %}
+{% set filtros_abertos_conferencia = filtro_busca or filtro_responsavel != 'todos' %}
+{% import "components/value_display.html" as values %}
+{% import "reinf/_conferencias.html" as conferencia %}
+
+<div class="dashboard-shell">
+    <div class="page-header">
+        <div>
+            {% if visao_reinf == 'operacional' %}
+                <h1>REINF mensal</h1>
+                <p class="muted">
+                    A fila considera apenas pagamentos ja realizados na competencia selecionada e que entram na prestacao de contas do IRRF.
+                </p>
+            {% elif visao_reinf == 'conferencia_mensal' %}
+                <h1>Conferencia REINF mensal</h1>
+                <p class="muted">
+                    Leitura limpa por beneficiario na competencia paga. A tela principal mostra so exercicio, nome, CPF/CNPJ, valor base e IRRF retido.
+                </p>
+            {% else %}
+                <h1>Conferencia REINF anual</h1>
+                <p class="muted">
+                    Total anual por beneficiario usando apenas pagamentos com IRRF, com abertura opcional por exercicio pago.
+                </p>
+            {% endif %}
+        </div>
+        <div class="page-actions">
+            {% if visao_reinf == 'operacional' %}
+                <a class="btn btn-ghost" href="{{ url_for('reinf.index', visao='conferencia_mensal', competencia=filtro_competencia) }}">Conferencia mensal</a>
+                <a class="btn btn-ghost" href="{{ url_for('reinf.index', visao='conferencia_anual', ano=filtro_competencia[:4], competencia=filtro_competencia) }}">Conferencia anual</a>
+            {% elif visao_reinf == 'conferencia_mensal' %}
+                <a class="btn btn-ghost" href="{{ url_for('reinf.index', visao='operacional', competencia=filtro_competencia) }}">Voltar para REINF mensal</a>
+                <a class="btn btn-secondary" href="{{ url_for('reinf.index', visao='conferencia_anual', ano=filtro_competencia[:4], competencia=filtro_competencia, q=filtro_busca, responsavel=filtro_responsavel) }}">Ir para anual</a>
+            {% else %}
+                <a class="btn btn-ghost" href="{{ url_for('reinf.index', visao='operacional', competencia=filtro_competencia) }}">Voltar para REINF mensal</a>
+                <a class="btn btn-secondary" href="{{ url_for('reinf.index', visao='conferencia_mensal', competencia=filtro_competencia, q=filtro_busca, responsavel=filtro_responsavel) }}">Ir para mensal</a>
+            {% endif %}
+            {% if export_url %}
+                <a class="btn btn-ghost" href="{{ export_url }}">Exportar CSV</a>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if visao_reinf == 'operacional' %}
+        {% include "reinf/_operacional.html" %}
+    {% elif visao_reinf == 'conferencia_mensal' %}
+        {% include "reinf/_conferencia_mensal.html" %}
+    {% else %}
+        {% include "reinf/_conferencia_anual.html" %}
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const master = document.querySelector("[data-reinf-select-all]");
+    if (master) {
+        const checks = Array.from(document.querySelectorAll('input[name="selecionados"]'));
+        master.addEventListener("change", () => {
+            checks.forEach((check) => {
+                check.checked = master.checked;
+            });
+        });
+    }
+
+    const detailButtons = Array.from(document.querySelectorAll("[data-detail-target]"));
+    detailButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            const targetId = button.getAttribute("data-detail-target");
+            const target = document.getElementById(targetId);
+            if (!target) {
+                return;
+            }
+
+            const isOpen = button.getAttribute("aria-expanded") === "true";
+            detailButtons.forEach((otherButton) => {
+                const otherTarget = document.getElementById(otherButton.getAttribute("data-detail-target"));
+                if (!otherTarget) {
+                    return;
+                }
+                otherButton.setAttribute("aria-expanded", "false");
+                otherButton.textContent = otherButton.getAttribute("data-label-closed") || "Ver detalhes";
+                otherTarget.hidden = true;
+            });
+
+            if (isOpen) {
+                target.hidden = true;
+                button.setAttribute("aria-expanded", "false");
+                button.textContent = button.getAttribute("data-label-closed") || "Ver detalhes";
+                return;
+            }
+
+            target.hidden = false;
+            button.setAttribute("aria-expanded", "true");
+            button.textContent = button.getAttribute("data-label-open") || "Fechar detalhes";
+        });
+    });
+});
+</script>
+{% endblock %}

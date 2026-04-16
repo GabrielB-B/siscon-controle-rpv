@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+
+{% block title %}Itens com IRRF - RPVs dativos{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Itens individuais com IRRF{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Itens com IRRF</h1>
+        <p class="muted">Tela operacional dos itens que exigem tratamento individual.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('dativos.lista_cis') }}">Voltar para RPVs dativos</a>
+        <a class="btn btn-secondary" href="{{ url_for('dativos.lotes_sem_irrf') }}">Ver lotes sem IRRF</a>
+        <a class="btn" href="{{ url_for('dativos.novo_ci') }}">Nova C.I.</a>
+    </div>
+</div>
+
+<div class="filters-card">
+    <details class="filters-toggle"
+        data-filter-panel="dativos_itens"
+        {% if filtros.get('q') or filtros.get('ne') or filtros.get('exercicio') or filtros.get('responsavel') not in [None, '', 'todos', 'meus'] or filtros.get('situacao_rpv_id') or filtros.get('situacao_imposto_id') or mostrar_encerrados %}
+            open
+        {% endif %}
+    >
+        <summary>
+            <span>Filtros de pesquisa</span>
+            <span class="arrow">▼</span>
+        </summary>
+
+        <div class="filters-body">
+            <form method="GET" id="dativos-itens-filter-form">
+                <div class="filters-grid-items">
+                    <div class="form-group">
+                        <label for="q">Busca</label>
+                        <input
+                            type="text"
+                            id="q"
+                            name="q"
+                            placeholder="Nome, documento, processo, C.I., resumo ou NE"
+                            value="{{ filtros.get('q', '') }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ne">NE</label>
+                        <input
+                            type="text"
+                            id="ne"
+                            name="ne"
+                            placeholder="Ex.: 25"
+                            value="{{ filtros.get('ne', '') }}"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="exercicio">Exercicio</label>
+                        <input type="month" id="exercicio" name="exercicio" value="{{ filtros.get('exercicio', '') }}">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="responsavel">Responsavel</label>
+                        <select id="responsavel" name="responsavel">
+                            <option value="meus" {% if filtro_responsavel == 'meus' %}selected{% endif %}>So os meus</option>
+                            <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                            {% for usuario in usuarios %}
+                                <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>
+                                    {{ usuario.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="situacao_rpv_id">Situacao do RPV</label>
+                        <select id="situacao_rpv_id" name="situacao_rpv_id">
+                            <option value="">Todas</option>
+                            {% for situacao in situacoes_rpv %}
+                                <option value="{{ situacao.id }}" {% if filtros.get('situacao_rpv_id') == situacao.id|string %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="situacao_imposto_id">Situacao do IRRF</label>
+                        <select id="situacao_imposto_id" name="situacao_imposto_id">
+                            <option value="">Todas</option>
+                            {% for situacao in situacoes_imposto %}
+                                <option value="{{ situacao.id }}" {% if filtros.get('situacao_imposto_id') == situacao.id|string %}selected{% endif %}>
+                                    {{ situacao.nome }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-inline" for="mostrar_encerrados">
+                            <input
+                                type="checkbox"
+                                id="mostrar_encerrados"
+                                name="mostrar_encerrados"
+                                value="1"
+                                {% if mostrar_encerrados %}checked{% endif %}
+                            >
+                            <span>Incluir concluídos e cancelados</span>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <button type="submit">Filtrar</button>
+                    </div>
+
+                    <div class="form-group">
+                        <a class="btn btn-secondary" href="{{ url_for('dativos.itens_com_irrf', sem_favorito=1) }}">Limpar</a>
+                    </div>
+                </div>
+            </form>
+
+            {% set saved_filter_scope = 'dativos_itens' %}
+            {% set saved_filter_form_id = 'dativos-itens-filter-form' %}
+            {% set saved_filter_base_url = url_for('dativos.itens_com_irrf') %}
+            {% set saved_filter_help = 'Guarde filtros dos itens com IRRF para reabrir a mesma fila sem reconfigurar a tela.' %}
+            {% set saved_filter_embedded = true %}
+            {% include "components/saved_filters_bar.html" %}
+        </div>
+    </details>
+</div>
+
+{% set processo_crosscheck_scope = 'dativos' %}
+{% set processo_crosscheck_grade_vazia = not itens %}
+{% include "components/processo_crosscheck_card.html" %}
+
+<div class="list-card">
+    <div class="workbench-toolbar">
+        <div class="workbench-summary">
+            <div><strong>Responsavel:</strong>
+                {% if filtro_responsavel == 'meus' %}
+                    So os meus
+                {% elif filtro_responsavel and filtro_responsavel != 'todos' %}
+                    {% for usuario in usuarios %}
+                        {% if filtro_responsavel == usuario.id|string %}
+                            {{ usuario.nome }}
+                        {% endif %}
+                    {% endfor %}
+                {% else %}
+                    Todos
+                {% endif %}
+            </div>
+            <div><strong>Visao:</strong> {% if mostrar_encerrados %}Todos os status{% else %}Fila ativa{% endif %}</div>
+            <div><strong>Total encontrado:</strong> {{ itens|length }}</div>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table class="detail-table-items">
+            <thead>
+                <tr>
+                    <th class="col-exercicio">Exercicio</th>
+                    <th class="col-resumo">Resumo operacional</th>
+                    <th class="col-valor">Valor</th>
+                    <th class="col-imposto">Imposto</th>
+                    <th class="col-curta">NE</th>
+                    <th class="col-curta">OB</th>
+                    <th class="col-curta">OB IRRF</th>
+                    <th>Situacao do RPV</th>
+                    <th>Situacao do IRRF</th>
+                    <th>Acoes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in itens %}
+                    <form id="quick-form-item-{{ item.id }}" method="POST" action="{{ url_for('dativos.atualizacao_rapida_item', item_id=item.id, **filtros.to_dict()) }}">
+                        {{ csrf_input() }}
+                        <input type="hidden" name="origem" value="itens_com_irrf">
+                    </form>
+
+                    <tr>
+                        <td>{{ item.dativo_ci.exercicio_formatado }}</td>
+                        <td>
+                            <div class="resumo-box">{{ item.resumo_operacional_atual }}</div>
+                            <div class="summary-meta-row">
+                                <span class="summary-meta-pill">
+                                    Responsavel: {{ item.responsavel.nome if item.responsavel else 'Nao informado' }}
+                                </span>
+                                {% if item.numero_se %}
+                                    <span class="summary-meta-pill">
+                                        SE: {{ item.numero_se }}
+                                    </span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td>R$ {{ item.valor_bruto|moeda_br }}</td>
+                        <td>R$ {{ (item.valor_irrf or 0)|moeda_br }}</td>
+                        <td>
+                            <input
+                                class="inline-input"
+                                type="text"
+                                name="nota_empenho"
+                                value="{{ item.nota_empenho or '' }}"
+                                title="NE única no sistema e obrigatória ao marcar como pago ou concluído."
+                                form="quick-form-item-{{ item.id }}"
+                            >
+                        </td>
+                        <td>
+                            <input
+                                class="inline-input"
+                                type="text"
+                                name="ordem_bancaria"
+                                value="{{ item.ordem_bancaria or '' }}"
+                                title="OB principal única no sistema e obrigatória ao marcar como pago ou concluído."
+                                form="quick-form-item-{{ item.id }}"
+                            >
+                        </td>
+                        <td>
+                            <input
+                                class="inline-input"
+                                type="text"
+                                name="ob_imposto"
+                                value="{{ item.ob_imposto or '' }}"
+                                form="quick-form-item-{{ item.id }}"
+                            >
+                        </td>
+                        <td>
+                            <select
+                                class="status-select {{ item.situacao_rpv.cor_badge or 'badge-slate' }}"
+                                name="situacao_rpv_id"
+                                form="quick-form-item-{{ item.id }}"
+                            >
+                                {% for situacao in situacoes_rpv %}
+                                    <option value="{{ situacao.id }}" {% if item.situacao_rpv_id == situacao.id %}selected{% endif %}>
+                                        {{ situacao.nome }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td>
+                            <select
+                                class="status-select {{ item.situacao_imposto.cor_badge or 'badge-slate' }}"
+                                name="situacao_imposto_id"
+                                form="quick-form-item-{{ item.id }}"
+                            >
+                                {% for situacao in situacoes_imposto %}
+                                    <option value="{{ situacao.id }}" {% if item.situacao_imposto_id == situacao.id %}selected{% endif %}>
+                                        {{ situacao.nome }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td>
+                            <div class="actions-inline">
+                                <button type="submit" class="btn btn-sm" form="quick-form-item-{{ item.id }}">Salvar</button>
+                                <a class="btn btn-secondary btn-sm" href="{{ url_for('dativos.detalhe_item_com_irrf', item_id=item.id, retorno=url_retorno_atual) }}">Abrir</a>
+                            </div>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr>
+                        <td colspan="10">Nenhum item com IRRF encontrado.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

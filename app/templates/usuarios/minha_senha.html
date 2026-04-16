@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Minha senha - SISCON{% endblock %}
+{% block topbar_title %}Minha senha{% endblock %}
+{% block topbar_subtitle %}Segurança da conta{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h1>Atualizar senha</h1>
+        <p class="muted">Mantenha sua conta protegida e pronta para recuperação futura.</p>
+    </div>
+</div>
+
+{% if current_user.forcar_troca_senha %}
+    <div class="password-callout">
+        Sua conta está marcada para <strong>troca obrigatória de senha</strong>. Atualize a senha para continuar usando o sistema normalmente.
+    </div>
+{% endif %}
+
+<form method="POST" class="password-card">
+    {{ csrf_input() }}
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Segurança</p>
+            <h2>Nova senha de acesso</h2>
+        </div>
+    </div>
+
+    <div class="password-grid">
+        {% if not current_user.forcar_troca_senha %}
+            <div class="form-group">
+                <label for="senha_atual">Senha atual</label>
+                <input type="password" id="senha_atual" name="senha_atual" required>
+            </div>
+        {% endif %}
+
+        <div class="form-group">
+            <label for="nova_senha">Nova senha</label>
+            <input type="password" id="nova_senha" name="nova_senha" required>
+            <small class="muted">Use pelo menos 8 caracteres, com letras e números.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="confirmar_senha">Confirmar nova senha</label>
+            <input type="password" id="confirmar_senha" name="confirmar_senha" required>
+        </div>
+    </div>
+
+    <div class="password-actions">
+        <button type="submit">Atualizar senha</button>
+        {% if not current_user.forcar_troca_senha %}
+            <a class="btn btn-secondary" href="{{ url_for('dashboard.index') }}">Cancelar</a>
+        {% endif %}
+    </div>
+</form>
+{% endblock %}

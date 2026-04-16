@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Validar codigo - SISCON{% endblock %}
+
+{% block content_guest %}
+{% import "components/sisco_brand.html" as sisco %}
+<div class="auth-shell">
+    <section class="auth-card auth-card-compact">
+        <div class="auth-hero">
+            {{ sisco.mark('auth') }}
+            <p class="auth-kicker">Validacao segura</p>
+            <h1 class="auth-title auth-title-sm">Informe o codigo</h1>
+            <p class="auth-copy">
+                Digite o codigo de 6 digitos enviado para
+                <strong>{{ contexto.masked_destination }}</strong>.
+            </p>
+        </div>
+
+        <div class="auth-status-card">
+            <div class="auth-status-row">
+                <strong>Canal de envio</strong>
+                <span class="auth-countdown-chip">{{ contexto.channel|upper }}</span>
+            </div>
+            <div class="auth-status-row">
+                <span>Tempo restante para usar o codigo</span>
+                <strong class="auth-countdown-chip" data-reset-countdown="{{ contexto.seconds_remaining }}">
+                    {{ "%02d:%02d"|format(contexto.seconds_remaining // 60, contexto.seconds_remaining % 60) }}
+                </strong>
+            </div>
+        </div>
+
+        <form method="POST" class="auth-form" autocomplete="one-time-code">
+            {{ csrf_input() }}
+            <div class="form-group">
+                <label for="codigo">Codigo de recuperacao</label>
+                <input
+                    type="text"
+                    id="codigo"
+                    name="codigo"
+                    class="auth-code-input"
+                    inputmode="numeric"
+                    autocomplete="one-time-code"
+                    maxlength="6"
+                    placeholder="000000"
+                    aria-describedby="codigo-ajuda"
+                    required
+                    autofocus
+                >
+                <small id="codigo-ajuda" class="auth-helper-copy">
+                    Se o codigo expirar ou houver erro de digitacao, solicite um novo.
+                </small>
+            </div>
+
+            <button type="submit">Validar codigo</button>
+        </form>
+
+        <div class="auth-inline-meta auth-inline-meta-centered">
+            <a class="auth-link" href="{{ url_for('auth.forgot_password') }}">Solicitar novo codigo</a>
+            <span>Depois da validacao, voce podera definir a nova senha.</span>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const countdownNode = document.querySelector("[data-reset-countdown]");
+    if (!countdownNode) {
+        return;
+    }
+
+    let remaining = parseInt(countdownNode.dataset.resetCountdown || "0", 10);
+    const render = () => {
+        const safeRemaining = Math.max(remaining, 0);
+        const minutes = String(Math.floor(safeRemaining / 60)).padStart(2, "0");
+        const seconds = String(safeRemaining % 60).padStart(2, "0");
+        countdownNode.textContent = minutes + ":" + seconds;
+    };
+
+    render();
+    if (remaining <= 0) {
+        return;
+    }
+
+    const intervalId = window.setInterval(function () {
+        remaining -= 1;
+        render();
+        if (remaining <= 0) {
+            window.clearInterval(intervalId);
+        }
+    }, 1000);
+});
+</script>
+{% endblock %}

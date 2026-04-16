@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Usuários - SISCON{% endblock %}
+{% block topbar_title %}Usuários{% endblock %}
+{% block topbar_subtitle %}Gestão de acessos do sistema{% endblock %}
+
+{% block content %}
+{% import "components/value_display.html" as values %}
+
+<div class="page-header">
+    <div>
+        <h1>Usuários do sistema</h1>
+        <p class="muted">Crie o acesso inicial da equipe e deixe que cada pessoa complete o próprio cadastro no primeiro uso.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('dashboard.index') }}">Retornar</a>
+        <a class="btn" href="{{ url_for('usuarios.novo') }}">Novo usuário</a>
+    </div>
+</div>
+
+<section class="metric-grid">
+    {% for metrica in metricas %}
+        <article class="card metric-card">
+            <div class="metric-label">{{ metrica.label }}</div>
+            <div class="metric-value">{{ values.render_value(metrica.valor, 'numero', 'metric') }}</div>
+            <div class="metric-note">{{ metrica.nota }}</div>
+        </article>
+    {% endfor %}
+</section>
+
+<section class="users-card">
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Acessos</p>
+            <h2>Pessoas cadastradas</h2>
+        </div>
+        <div class="muted">{{ usuarios|length }} usuário(s)</div>
+    </div>
+
+    {% if usuarios %}
+        <div class="table-wrap">
+            <table class="users-table">
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Login</th>
+                        <th>Contato</th>
+                        <th>Cargo / Setor</th>
+                        <th>Perfil</th>
+                        <th>Último login</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for usuario in usuarios %}
+                        <tr>
+                            <td>
+                                <strong>{{ usuario.nome }}</strong>
+                                {% if current_user.id == usuario.id %}
+                                    <div class="muted">Usuário atual</div>
+                                {% endif %}
+                            </td>
+                            <td>{{ usuario.login }}</td>
+                            <td>
+                                <div>{{ usuario.email or 'Cadastro pendente' }}</div>
+                                <div class="muted">{{ usuario.telefone_formatado or 'Telefone pendente' }}</div>
+                            </td>
+                            <td>
+                                <div>{{ usuario.cargo or 'Cargo pendente' }}</div>
+                                <div class="muted">{{ usuario.setor or 'Setor pendente' }}</div>
+                            </td>
+                            <td>
+                                <div class="user-badges">
+                                    {% if usuario.is_admin %}
+                                        <span class="user-badge is-admin">Administrador</span>
+                                    {% endif %}
+                                    {% if usuario.ativo %}
+                                        <span class="user-badge is-active">Ativo</span>
+                                    {% else %}
+                                        <span class="user-badge is-inactive">Inativo</span>
+                                    {% endif %}
+                                    {% if usuario.forcar_troca_senha %}
+                                        <span class="user-badge is-warning">Troca de senha pendente</span>
+                                    {% endif %}
+                                    {% if usuario.perfil_pendente %}
+                                        <span class="user-badge is-warning">Cadastro pendente</span>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td>
+                                <div>{{ usuario.ultimo_login_legivel }}</div>
+                                <div class="muted">{{ usuario.ultimo_login_ip or 'Sem IP registrado' }}</div>
+                            </td>
+                            <td>
+                                <a class="btn btn-ghost btn-sm" href="{{ url_for('usuarios.editar', usuario_id=usuario.id) }}">Abrir</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            Nenhum usuário foi cadastrado ainda.
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

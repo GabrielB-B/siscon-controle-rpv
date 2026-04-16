@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Painel inicial - SISCON{% endblock %}
+{% block topbar_title %}Painel inicial{% endblock %}
+{% block topbar_subtitle %}Central de trabalho do setor{% endblock %}
+
+{% block content %}
+{% import "components/value_display.html" as values %}
+<div class="dashboard-shell">
+    <section class="hero-panel">
+        <article class="card hero-card">
+            <p class="kicker">Painel inicial</p>
+            <h1 class="hero-title">O que pede continuidade agora</h1>
+            <p class="hero-copy">
+                Abertura mais direta para o dia: sua fila ativa, pendências fiscais e o quanto
+                já saiu no mês, com destaque próprio para o fluxo de dativos.
+            </p>
+
+            <div class="pill-row">
+                <span class="pill">Competência atual: {{ competencia_atual_legivel }}</span>
+                <span class="pill">Minha fila ativa: {{ fila_operacional.total_quantidade }}</span>
+                <span class="pill">Pendencias documentais: {{ total_pendencias_documentais }}</span>
+                <span class="pill">Alertas críticos de IRRF: {{ total_alertas_irrf }}</span>
+                <span class="pill">C.I.s ativas em dativos: {{ total_cis_dativos }}</span>
+            </div>
+        </article>
+
+        <article class="card hero-side hero-side-card">
+            <div>
+                <p class="section-kicker">Prestação mensal</p>
+                <h2 class="hero-side-title">Fechamento REINF de {{ prestacao_mensal.competencia_legivel }}</h2>
+                <p class="hero-side-copy">
+                    Entram aqui somente pagamentos da competência em fechamento com IRRF. O restante da home
+                    ficou mais operacional para mostrar fila, pendências e gasto do mês.
+                </p>
+            </div>
+
+            <div class="hero-stat-grid">
+                <article class="hero-stat-card">
+                    <span>Registros do mês</span>
+                    <strong>{{ values.render_value(prestacao_mensal.total_registros, 'numero', 'inline') }}</strong>
+                </article>
+                <article class="hero-stat-card">
+                    <span>Pendentes de envio</span>
+                    <strong>{{ values.render_value(prestacao_mensal.pendentes, 'numero', 'inline') }}</strong>
+                </article>
+                <article class="hero-stat-card">
+                    <span>Concluídos</span>
+                    <strong>{{ values.render_value(prestacao_mensal.concluidos, 'numero', 'inline') }}</strong>
+                </article>
+                <article class="hero-stat-card">
+                    <span>Cancelados</span>
+                    <strong>{{ values.render_value(prestacao_mensal.cancelados, 'numero', 'inline') }}</strong>
+                </article>
+                <article class="hero-stat-card">
+                    <span>IRRF do mês</span>
+                    <strong>{{ values.render_value(prestacao_mensal.valor_irrf, 'moeda', 'compact') }}</strong>
+                </article>
+            </div>
+
+            <div class="hero-side-actions">
+                <a class="btn btn-secondary" href="{{ prestacao_mensal.url }}">Abrir REINF da competência</a>
+            </div>
+        </article>
+    </section>
+
+    <section class="metric-grid">
+        {% for card in cards %}
+            <article class="card metric-card">
+                <div class="metric-label">{{ card.label }}</div>
+                <div class="metric-value">{{ values.render_value(card.valor, card.tipo, 'metric') }}</div>
+                <div class="metric-note">{{ card.nota }}</div>
+                {% if card.valor_auxiliar is defined %}
+                    <div class="metric-aux">
+                        {% if card.rotulo_auxiliar is defined %}
+                            <span class="metric-aux-label">{{ card.rotulo_auxiliar }}</span>
+                        {% endif %}
+                        {{ values.render_value(card.valor_auxiliar, card.tipo_auxiliar, 'inline') }}
+                    </div>
+                {% endif %}
+            </article>
+        {% endfor %}
+    </section>
+
+    <section class="panel-grid">
+        <article class="card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Minha continuidade</p>
+                    <h2>Fila ativa por módulo</h2>
+                    <p class="section-caption">Somente o que ainda pede andamento sob sua responsabilidade.</p>
+                </div>
+            </div>
+
+            <div class="stack-list">
+                {% for item in fila_operacional.itens %}
+                    <a class="stack-item {% if item.sem_pendencias %}stack-item-clear{% endif %}" href="{{ item.url }}">
+                        <div>
+                            <h3>{{ item.label }}</h3>
+                            <div class="stack-meta">{{ item.nota_exibida }}</div>
+                            <span class="alert-badge {% if item.sem_pendencias %}alert-badge-success{% endif %}">
+                                {{ 'Sem pendencias' if item.sem_pendencias else item.acao }}
+                            </span>
+                        </div>
+                        {% if item.sem_pendencias %}
+                            <div class="stack-kpi stack-kpi-clear">
+                                <span class="stack-value stack-value-clear">Tudo em dia</span>
+                            </div>
+                        {% else %}
+                            <div class="stack-kpi">
+                                <span class="stack-value">{{ values.render_value(item.quantidade, 'numero', 'inline') }}</span>
+                                <span class="stack-count">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</span>
+                            </div>
+                        {% endif %}
+                    </a>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Ação imediata</p>
+                    <h2>Pendências operacionais de IRRF</h2>
+                    <p class="section-caption">Cada linha abre no módulo correto para tratamento.</p>
+                </div>
+            </div>
+
+            {% if alertas_irrf %}
+                <div class="stack-list">
+                    {% for alerta in alertas_irrf %}
+                        <a class="stack-item" href="{{ alerta.url }}">
+                            <div>
+                                <h4>{{ alerta.titulo }}</h4>
+                                <div class="stack-meta">
+                                    {{ alerta.origem }} | {{ alerta.descricao }}
+                                </div>
+                                <div class="stack-meta">{{ alerta.meta }}</div>
+                                <span class="alert-badge">{{ alerta.acao }}</span>
+                            </div>
+                            <div class="stack-kpi">
+                                <span class="stack-value">{{ values.render_value(alerta.valor, 'moeda', 'compact') }}</span>
+                            </div>
+                        </a>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    Nenhuma pendência crítica de IRRF apareceu na leitura inicial da home.
+                </div>
+            {% endif %}
+        </article>
+    </section>
+
+    <section class="card">
+        <div class="section-heading">
+            <div>
+                <p class="section-kicker">Dativos pagos</p>
+                <h2>Gasto de dativos em {{ dativos_mes.competencia_legivel }}</h2>
+                <p class="section-caption">
+                    Resumo do mês atual com recorte entre dativos sem IRRF e com IRRF, mais o histórico curto das últimas competências.
+                </p>
+            </div>
+            <a class="btn btn-ghost" href="{{ url_for('dativos.lista_cis') }}">Abrir RPVs dativos</a>
+        </div>
+
+        <div class="bi-inline-kpis bi-summary-cycle-grid">
+            <article class="bi-mini-stat">
+                <span>Total pago no mês</span>
+                <strong>{{ values.render_value(dativos_mes.total_valor, 'moeda', 'inline') }}</strong>
+            </article>
+            <article class="bi-mini-stat">
+                <span>Beneficiários pagos</span>
+                <strong>{{ values.render_value(dativos_mes.total_quantidade, 'numero', 'inline') }}</strong>
+            </article>
+            {% for grupo in dativos_mes.grupos %}
+                <article class="bi-mini-stat">
+                    <span>{{ grupo.label }}</span>
+                    <strong>{{ values.render_value(grupo.valor_total, 'moeda', 'inline') }}</strong>
+                </article>
+            {% endfor %}
+        </div>
+
+        {% if serie_dativos %}
+            <div class="stacked-month-grid">
+                {% for item in serie_dativos %}
+                    <article class="stacked-month-card">
+                        <div class="stacked-month-head">
+                            <span>{{ item.label }}</span>
+                            <strong>{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</strong>
+                        </div>
+                        <div class="stacked-month-track">
+                            <div class="stacked-month-column" style="height: {{ item.altura_percentual }}%;">
+                                {% for segmento in item.segmentos %}
+                                    {% if segmento.valor_total > 0 %}
+                                        <span
+                                            class="stacked-month-segment {{ segmento.css_class }}"
+                                            style="height: {{ segmento.percentual_interno }}%;"
+                                            title="{{ segmento.label }}: R$ {{ segmento.valor_total|moeda_br }}"
+                                        ></span>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div class="stacked-month-meta">{{ item.quantidade_total }} pagamento(s)</div>
+                    </article>
+                {% endfor %}
+            </div>
+
+            <div class="chart-legend">
+                <span><span class="legend-dot stack-segment-soft"></span>Dativos sem IRRF</span>
+                <span><span class="legend-dot stack-segment-strong"></span>Dativos com IRRF</span>
+            </div>
+        {% else %}
+            <div class="empty-state">
+                Ainda não há pagamentos de dativos suficientes para montar a série mensal.
+            </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

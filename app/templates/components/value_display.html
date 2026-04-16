@@ -1,0 +1,13 @@
+{% macro render_value(valor, tipo='numero', variant='metric') -%}
+    {% set variant_class = 'value-display-' ~ variant %}
+    {% if tipo == 'moeda' %}
+        <span class="value-display is-money {{ variant_class }}">
+            <span class="value-symbol">R$</span>
+            <span class="value-amount">{{ valor|moeda_br }}</span>
+        </span>
+    {% else %}
+        <span class="value-display is-number {{ variant_class }}">
+            <span class="value-amount">{{ valor }}</span>
+        </span>
+    {% endif %}
+{%- endmacro %}

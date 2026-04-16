@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}RPVs dativos - Novo beneficiário do lote{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Adicionar beneficiário ao lote sem IRRF{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Adicionar beneficiário ao lote</h1>
+        <p class="muted">Use esta tela apenas para complementar item que ficou de fora da planilha.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_retorno }}">Retornar</a>
+    </div>
+</div>
+
+<div class="section-card content-card-narrow">
+    <form method="POST">
+        {{ csrf_input() }}
+        <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente" value="{{ form_data.get('confirmar_processo_existente', '0') }}">
+
+        <div class="form-group">
+            <label for="nome_beneficiario">Nome</label>
+            <input type="text" id="nome_beneficiario" name="nome_beneficiario" value="{{ form_data.get('nome_beneficiario', '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="cpf_original">CPF/CNPJ</label>
+            <input type="text" id="cpf_original" name="cpf_original" value="{{ form_data.get('cpf_original', '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="numero_processo">Processo</label>
+            <input type="text" id="numero_processo" name="numero_processo" value="{{ form_data.get('numero_processo', '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="valor_bruto">Valor bruto</label>
+            <input type="text" id="valor_bruto" name="valor_bruto" value="{{ form_data.get('valor_bruto', '') }}" required>
+        </div>
+
+        {% if ocorrencias_processo %}
+        <div class="section-card warning-panel content-top-14">
+            <h3 class="section-card-title">Processo já encontrado no sistema</h3>
+            <p class="muted">
+                O número do processo informado já existe em outro ponto do sistema. Confira abaixo antes de continuar.
+            </p>
+
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Origem</th>
+                        <th>Responsável</th>
+                        <th>Situação do RPV</th>
+                        <th>Situação do IRRF</th>
+                        <th>Resumo operacional</th>
+                        <th>Abrir</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ocorrencia in ocorrencias_processo %}
+                    <tr>
+                        <td>{{ ocorrencia.origem }}</td>
+                        <td>{{ ocorrencia.responsavel }}</td>
+                        <td>{{ ocorrencia.situacao_rpv }}</td>
+                        <td>{{ ocorrencia.situacao_irrf }}</td>
+                        <td>{{ ocorrencia.resumo_operacional }}</td>
+                        <td>
+                            {% if ocorrencia.abrir_url %}
+                                <a class="btn btn-secondary btn-sm" href="{{ ocorrencia.abrir_url }}">Abrir</a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <div class="content-top-14">
+                <button
+                    type="submit"
+                    class="btn"
+                    onclick="document.getElementById('confirmar_processo_existente').value='1';"
+                >
+                    Confirmar e continuar mesmo assim
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="form-actions">
+            <a class="btn btn-secondary" href="{{ url_retorno }}">Cancelar</a>
+            <button type="submit">Salvar beneficiário</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

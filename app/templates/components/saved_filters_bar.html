@@ -1,0 +1,44 @@
+<div
+    class="saved-filters-card{% if saved_filter_embedded %} is-embedded{% endif %}"
+    data-saved-filters
+    data-saved-filters-scope="{{ saved_filter_scope }}"
+    data-saved-form-id="{{ saved_filter_form_id }}"
+    data-saved-filters-base-url="{{ saved_filter_base_url }}"
+    data-saved-filters-autoload="true"
+>
+    <div class="saved-filters-head">
+        <div>
+            <div class="saved-filters-label">Filtros salvos</div>
+            <div class="saved-filters-copy">
+                {{ saved_filter_help }}
+            </div>
+        </div>
+        <div class="saved-filters-favorite" data-saved-filters-favorite aria-live="polite">
+            Nenhum favorito definido.
+        </div>
+    </div>
+
+    <div class="saved-filters-controls">
+        <div class="saved-filters-inputs">
+            <select data-saved-filters-list aria-label="Filtros salvos">
+                <option value="">Nenhum filtro salvo</option>
+            </select>
+            <input
+                type="text"
+                maxlength="60"
+                placeholder="Nome do filtro"
+                data-saved-filters-name
+                aria-label="Nome do filtro salvo"
+            >
+        </div>
+
+        <div class="saved-filters-actions">
+            <button type="button" class="btn btn-secondary btn-sm" data-saved-filters-save>Salvar atual</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-saved-filters-apply>Aplicar</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-saved-filters-favorite-toggle>Favoritar</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-saved-filters-delete>Excluir</button>
+        </div>
+    </div>
+
+    <div class="saved-filters-status" data-saved-filters-status aria-live="polite"></div>
+</div>

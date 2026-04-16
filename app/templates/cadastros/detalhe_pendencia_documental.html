@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+
+{% block title %}Documento pendente - SISCON{% endblock %}
+{% block topbar_title %}Documento pendente{% endblock %}
+{% block topbar_subtitle %}Cadastro guardado fora do fluxo oficial{% endblock %}
+
+{% block content %}
+{% import "components/value_display.html" as values %}
+{% macro pendencia_hidden_fields(pendencia) -%}
+<input type="hidden" name="exercicio" value="{{ pendencia.exercicio }}">
+<input type="hidden" name="processo_edoc" value="{{ pendencia.processo_edoc }}">
+<input type="hidden" name="numero_processo" value="{{ pendencia.numero_processo }}">
+<input type="hidden" name="data_ci" value="{{ pendencia.data_ci.strftime('%Y-%m-%d') if pendencia.data_ci else '' }}">
+<input type="hidden" name="tipo_rpv_id" value="{{ pendencia.tipo_rpv_id }}">
+<input type="hidden" name="nome_beneficiario" value="{{ pendencia.nome_beneficiario }}">
+<input type="hidden" name="tipo_documento" value="{{ pendencia.tipo_documento }}">
+<input type="hidden" name="documento_original" value="{{ pendencia.documento_original or '' }}">
+<input type="hidden" name="elaborador_id" value="{{ pendencia.responsavel_id }}">
+<input type="hidden" name="valor_bruto" value="{{ pendencia.valor_bruto }}">
+<input type="hidden" name="valor_irrf" value="{{ pendencia.valor_irrf or '' }}">
+<input type="hidden" name="sem_irrf" value="{{ '1' if pendencia.sem_irrf else '' }}">
+<input type="hidden" name="observacoes" value="{{ pendencia.observacoes or '' }}">
+{%- endmacro %}
+
+{% macro oficializar_pendencia_form(pendencia, classe='inline-form') -%}
+<form method="POST" action="{{ url_for('cadastros.novo_rpv') }}" class="{{ classe }}">
+    {{ csrf_input() }}
+    <input type="hidden" name="pendencia_id" value="{{ pendencia.id }}">
+    {{ pendencia_hidden_fields(pendencia) }}
+    <button type="submit" class="btn">Confirmar e oficializar RPV</button>
+</form>
+{%- endmacro %}
+
+<div class="page-header">
+    <div>
+        <h1>Documento pendente da RPV</h1>
+        <p class="muted">Salve o caso enquanto o CPF/CNPJ nao aparece, corrija quando encontrar o numero certo ou encerre sem apagar o historico.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='rpv_pendencia_documento', entidade_id=pendencia.id) }}">Abrir historico</a>
+        <a class="btn btn-secondary" href="{{ url_for('cadastros.lista_pendencias_documentais') }}">Voltar para a fila</a>
+        {% if pendencia.pode_continuar_fluxo_oficial and pendencia.status == 'aberta' %}
+            {{ oficializar_pendencia_form(pendencia) }}
+        {% endif %}
+    </div>
+</div>
+
+<div class="summary-grid">
+    <div class="readonly-box">
+        <strong>Situacao do cadastro</strong><br>
+        {{ pendencia.status_legivel }}
+    </div>
+    <div class="readonly-box">
+        <strong>Situacao do documento</strong><br>
+        {{ pendencia.documento_status_legivel }}
+    </div>
+    <div class="readonly-box">
+        <strong>Valor bruto informado</strong><br>
+        {{ values.render_value(pendencia.valor_bruto, 'moeda', 'inline') }}
+    </div>
+    <div class="readonly-box">
+        <strong>Liquido estimado</strong><br>
+        {{ values.render_value(pendencia.valor_liquido_estimado, 'moeda', 'inline') }}
+    </div>
+</div>
+
+<div class="section-card review-decision-panel {% if pendencia.status == 'descartada' %}review-panel-muted{% elif pendencia.pode_continuar_fluxo_oficial and pendencia.status == 'aberta' %}review-panel-ready{% elif not pendencia.documento_valido %}warning-panel{% endif %}">
+    <div class="review-decision-head">
+        <div>
+            <p class="review-kicker">Revisao do cadastro</p>
+            <h2 class="section-card-title">O que fazer agora</h2>
+            {% if pendencia.status == 'descartada' %}
+                <p class="muted">Este cadastro foi encerrado antes do fluxo oficial. Nada foi apagado e o historico continua disponivel.</p>
+            {% elif pendencia.pode_continuar_fluxo_oficial %}
+                <p class="muted">O CPF/CNPJ foi validado. Este cadastro ja pode virar RPV oficial.</p>
+            {% elif pendencia.documento_confirmado_manual %}
+                <p class="muted">A conferencia foi registrada, mas o cadastro continua aqui ate receber CPF/CNPJ valido.</p>
+            {% else %}
+                <p class="muted">O documento ainda nao foi validado. Deixe em branco se ainda nao encontrou, ou corrija o numero abaixo quando tiver o CPF/CNPJ certo.</p>
+            {% endif %}
+            <p class="review-inline-note">{{ pendencia.motivo_documento_exibido }}</p>
+        </div>
+        <div class="user-badges">
+            <span class="user-badge {% if pendencia.status == 'convertida' %}is-active{% elif pendencia.status == 'descartada' %}is-inactive{% else %}is-warning{% endif %}">
+                {{ pendencia.status_legivel }}
+            </span>
+            <span class="user-badge {% if pendencia.pode_continuar_fluxo_oficial %}is-active{% else %}is-warning{% endif %}">
+                {{ pendencia.documento_status_legivel }}
+            </span>
+        </div>
+    </div>
+
+    <div class="actions">
+        {% if not pendencia.documento_valido and not pendencia.documento_confirmado_manual and pendencia.status == 'aberta' %}
+            <form method="POST" class="inline-form">
+                {{ csrf_input() }}
+                <input type="hidden" name="acao" value="confirmar_documento">
+                {{ pendencia_hidden_fields(pendencia) }}
+                <button type="submit" class="btn btn-secondary">Registrar conferencia e manter pendente</button>
+            </form>
+        {% elif pendencia.documento_confirmado_manual and pendencia.status == 'aberta' %}
+            <form method="POST" class="inline-form">
+                {{ csrf_input() }}
+                <input type="hidden" name="acao" value="reabrir_validacao">
+                {{ pendencia_hidden_fields(pendencia) }}
+                <button type="submit" class="btn btn-secondary">Retirar registro de conferencia</button>
+            </form>
+        {% endif %}
+
+        {% if pendencia.pode_continuar_fluxo_oficial and pendencia.status == 'aberta' %}
+            {{ oficializar_pendencia_form(pendencia) }}
+        {% endif %}
+
+        {% if pendencia.status == 'aberta' %}
+            <form method="POST" class="inline-form">
+                {{ csrf_input() }}
+                <input type="hidden" name="acao" value="descartar">
+                {{ pendencia_hidden_fields(pendencia) }}
+                <button type="submit" class="btn btn-danger">Cancelar este cadastro</button>
+            </form>
+        {% elif pendencia.status == 'descartada' %}
+            <form method="POST" class="inline-form">
+                {{ csrf_input() }}
+                <input type="hidden" name="acao" value="reabrir_pendencia">
+                {{ pendencia_hidden_fields(pendencia) }}
+                <button type="submit" class="btn btn-secondary">Reabrir cadastro</button>
+            </form>
+        {% endif %}
+    </div>
+
+    <div class="hint-box review-hint-box">
+        Esta area e uma guarda temporaria: nao alimenta pagamentos, BI operacional nem REINF. O cadastro so sai daqui quando o documento for validado.
+    </div>
+</div>
+
+<form method="POST">
+    {{ csrf_input() }}
+    <input type="hidden" name="acao" value="salvar">
+    <fieldset class="review-form-shell" {% if pendencia.status != 'aberta' %}disabled{% endif %}>
+        <div class="section-card">
+            <h2 class="section-card-title">Dados do processo</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="exercicio">Exercicio</label>
+                    <input type="month" id="exercicio" name="exercicio" value="{{ pendencia.exercicio }}" required>
+                </div>
+                <div class="form-group">
+                    <label for="processo_edoc">Processo e-Doc / C.I.</label>
+                    <input type="text" id="processo_edoc" name="processo_edoc" value="{{ pendencia.processo_edoc }}" required>
+                </div>
+                <div class="form-group">
+                    <label for="numero_processo">Numero do processo</label>
+                    <input type="text" id="numero_processo" name="numero_processo" value="{{ pendencia.numero_processo }}" required>
+                </div>
+                <div class="form-group">
+                    <label for="data_ci">Data da C.I.</label>
+                    <input type="date" id="data_ci" name="data_ci" value="{{ pendencia.data_ci.strftime('%Y-%m-%d') if pendencia.data_ci else '' }}" required>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-card">
+            <h2 class="section-card-title">Beneficiario e documento</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="tipo_rpv_id">Tipo de RPV</label>
+                    <select id="tipo_rpv_id" name="tipo_rpv_id" required>
+                        {% for tipo in tipos_rpv %}
+                            <option value="{{ tipo.id }}" {% if pendencia.tipo_rpv_id == tipo.id %}selected{% endif %}>{{ tipo.nome }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group full-width">
+                    <label for="nome_beneficiario">Nome do beneficiario</label>
+                    <input type="text" id="nome_beneficiario" name="nome_beneficiario" value="{{ pendencia.nome_beneficiario }}" required>
+                </div>
+                <div class="form-group">
+                    <label for="tipo_documento">Tipo de documento</label>
+                    <select id="tipo_documento" name="tipo_documento" required>
+                        <option value="CPF" {% if pendencia.tipo_documento == 'CPF' %}selected{% endif %}>CPF</option>
+                        <option value="CNPJ" {% if pendencia.tipo_documento == 'CNPJ' %}selected{% endif %}>CNPJ</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="documento_original">CPF ou CNPJ</label>
+                    <input type="text" id="documento_original" name="documento_original" value="{{ pendencia.documento_original or '' }}">
+                    <small class="muted">Pode ficar em branco enquanto o documento nao foi encontrado. Quando outro numero for informado, o sistema valida do zero.</small>
+                </div>
+                <div class="form-group full-width">
+                    <label for="elaborador_id">Responsavel operacional</label>
+                    <select id="elaborador_id" name="elaborador_id" required>
+                        {% for usuario in usuarios %}
+                            <option value="{{ usuario.id }}" {% if pendencia.responsavel_id == usuario.id %}selected{% endif %}>
+                                {{ usuario.nome }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-card">
+            <h2 class="section-card-title">Dados financeiros</h2>
+            <div class="form-grid-3">
+                <div class="form-group">
+                    <label for="valor_bruto">Valor bruto</label>
+                    <input type="text" id="valor_bruto" name="valor_bruto" value="{{ pendencia.valor_bruto }}" required>
+                </div>
+                <div class="form-group">
+                    <label for="valor_irrf">Valor IRRF</label>
+                    <input type="text" id="valor_irrf" name="valor_irrf" value="{{ pendencia.valor_irrf or '' }}">
+                </div>
+                <div class="form-group full-width">
+                    <label class="checkbox-inline" for="sem_irrf">
+                        <input type="checkbox" id="sem_irrf" name="sem_irrf" value="1" {% if pendencia.sem_irrf %}checked{% endif %}>
+                        <span>Este cadastro deve seguir como caso sem IRRF</span>
+                    </label>
+                </div>
+                <div class="form-group full-width">
+                    <label for="observacoes">Observacoes</label>
+                    <textarea id="observacoes" name="observacoes">{{ pendencia.observacoes or '' }}</textarea>
+                </div>
+            </div>
+        </div>
+    </fieldset>
+
+    <div class="form-actions">
+        {% if pendencia.status == 'aberta' %}
+            <button type="submit">Salvar revisao</button>
+        {% else %}
+            <span class="muted">Cadastro encerrado. Reabra a revisao se quiser voltar a editar.</span>
+        {% endif %}
+    </div>
+</form>
+{% endblock %}
