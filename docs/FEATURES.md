@@ -10,6 +10,7 @@ RPV significa Requisição de Pequeno Valor. Nesta frente, o sistema controla pa
 - Identificação de registros sem IRRF.
 - Pendências documentais para casos incompletos.
 - Histórico de alterações sensíveis.
+- Edição controlada de valor bruto mediante confirmação.
 
 ## Pagamentos em Lote
 
@@ -29,12 +30,20 @@ Alguns pagamentos chegam agrupados em C.I.s e lotes. A aplicação separa lote, 
 - Conciliação de registros em estado inicial.
 - Relatórios de saída para revisão operacional.
 
-## REINF E BI
+## REINF e BI Operacional
 
 - Conferência mensal e anual de pagamentos com IRRF.
 - Agrupamento por beneficiário e competência.
 - Indicadores operacionais de status, pagamento e pendências.
 - Filtros por responsável, período, situação e busca textual.
+- Visão consolidada para apoiar tomada de decisão e priorização da rotina financeira.
+
+## Contexto Financeiro
+
+- Apoio ao controle de honorários advocatícios pagos pelo Estado.
+- Organização de fluxos típicos de órgão público estadual, como PGE.
+- Separação entre requisições individuais, pagamentos em lote e pendências.
+- Registro de status de empenho, ordens bancárias, IRRF e informações de conferência fiscal.
 
 ## Auditoria
 

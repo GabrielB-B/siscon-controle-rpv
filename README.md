@@ -1,6 +1,6 @@
 # SISCON Controle de RPVs
 
-Aplicação web Flask desenvolvida para apoiar um fluxo real de controle financeiro/operacional de RPVs, sigla para Requisições de Pequeno Valor. O sistema organiza requisições individuais, pagamentos agrupados em lotes, pendências documentais, conciliação de importações e conferência REINF.
+Aplicação web Flask desenvolvida para apoiar um fluxo real de controle financeiro/operacional de RPVs, sigla para Requisições de Pequeno Valor. O sistema organiza requisições individuais, pagamentos agrupados em lotes, pendências documentais, conciliação de importações, conferência REINF e BI operacional.
 
 O projeto nasceu para substituir controles dispersos em planilhas e verificações manuais por um sistema local com rastreabilidade, validação de regras, histórico de alterações e separação segura entre código e dados sensíveis.
 
@@ -8,7 +8,9 @@ Esta versão foi preparada para portfólio público. Ela demonstra arquitetura, 
 
 ## Contexto
 
-Setores financeiros que lidam com Requisições de Pequeno Valor precisam conferir processos, beneficiários, documentos, valores, imposto retido, status de empenho, ordens bancárias e informações de REINF. Esses pagamentos podem aparecer como requisições individuais ou como grupos/lotes vinculados a uma comunicação interna do setor. Quando esse fluxo depende apenas de planilhas, aumenta o risco de duplicidade, retrabalho, perda de histórico e alterações sem rastreio.
+Setores financeiros que lidam com Requisições de Pequeno Valor precisam conferir processos, beneficiários, documentos, valores, imposto retido, status de empenho, ordens bancárias e informações de REINF. No contexto que inspirou este projeto, o fluxo envolve honorários advocatícios pagos pelo Estado, processados em ambiente de Procuradoria-Geral do Estado (PGE), com necessidade de controle preciso sobre pagamentos individuais e pagamentos em lote.
+
+Esses pagamentos podem aparecer como requisições individuais ou como grupos/lotes vinculados a uma comunicação interna do setor. Quando esse fluxo depende apenas de planilhas, aumenta o risco de duplicidade, retrabalho, perda de histórico e alterações sem rastreio.
 
 O sistema organiza esse processo em uma aplicação web local, com foco em segurança operacional e produtividade da equipe.
 
@@ -18,7 +20,7 @@ O sistema organiza esse processo em uma aplicação web local, com foco em segur
 - Redução de risco operacional por meio de validação de documentos, valores, duplicidades e status.
 - Rastreabilidade de alterações críticas com histórico por usuário, data, hora e campos modificados.
 - Maior segurança para dados sensíveis, mantendo banco, planilhas, backups e segredos fora do Git.
-- Apoio à tomada de decisão com dashboard, filtros e visões de conferência.
+- Apoio à tomada de decisão com BI operacional, dashboard, filtros e visões de conferência.
 - Padronização de importações com relatórios de pendências antes da entrada definitiva no fluxo.
 - Evolução controlada do banco com migrations e testes automatizados.
 
@@ -32,6 +34,18 @@ O sistema organiza esse processo em uma aplicação web local, com foco em segur
 - Dashboard operacional com filtros, indicadores e visões de conferência.
 - Separação entre código, configuração local e dados sensíveis.
 - Suite automatizada com `pytest` cobrindo regras de negócio e fluxos críticos.
+
+## Funcionalidades de Negócio
+
+- Controle de RPVs individuais, com processo, beneficiário, documento, valor bruto, IRRF, valor líquido e status de pagamento.
+- Controle de pagamentos em lote, com separação por C.I., lote, item, beneficiário e situação fiscal.
+- BI operacional com indicadores de pagamento, pendências, responsáveis, competências, valores e situações.
+- Conferência REINF mensal e anual para pagamentos com retenção de IRRF.
+- Importação assistida de planilhas com normalização, validação, bloqueio de duplicidades e relatórios de pendências.
+- Gestão de pendências documentais para casos que ainda não podem entrar no fluxo financeiro definitivo.
+- Auditoria de alterações sensíveis, incluindo histórico com usuário, data, hora, ação, antes/depois e resumo do evento.
+- Controle de acesso com usuários, perfis, recuperação de senha, troca obrigatória e proteção CSRF.
+- Edição controlada de valores sensíveis, como valor bruto, sempre com confirmação explícita.
 
 ## Habilidades Demonstradas
 
