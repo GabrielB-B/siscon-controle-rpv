@@ -1,36 +1,36 @@
-# Notas De Portfolio
+# Notas de Portfólio
 
-Este projeto demonstra uma aplicacao operacional realista, com foco em confiabilidade, rastreabilidade e tratamento seguro de dados sensiveis.
+Este projeto demonstra uma aplicação operacional realista, com foco em confiabilidade, rastreabilidade e tratamento seguro de dados sensíveis.
 
 ## Habilidades Demonstradas
 
-- Modelagem de dominio com SQLAlchemy.
-- Evolucao de schema com Alembic.
-- Organizacao Flask por Blueprints.
+- Modelagem de domínio com SQLAlchemy.
+- Evolução de schema com Alembic.
+- Organização Flask por Blueprints.
 - Regras fiscais e financeiras com `Decimal`.
-- Importacao de planilhas com validacao e conciliacao.
-- Auditoria de alteracoes com snapshots.
-- Controle de acesso e recuperacao de senha.
+- Importação de planilhas com validação e conciliação.
+- Auditoria de alterações com snapshots.
+- Controle de acesso e recuperação de senha.
 - Dashboards operacionais com filtros.
-- Testes automatizados de regras de negocio e fluxos web.
-- Separacao entre codigo versionado e dados sensiveis.
-- Scripts locais para execucao em Windows.
+- Testes automatizados de regras de negócio e fluxos web.
+- Separação entre código versionado e dados sensíveis.
+- Scripts locais para execução em Windows.
 
-## Decisoes De Produto
+## Decisões de Produto
 
-- A aplicacao prioriza seguranca operacional: dados sensiveis ficam fora do repositorio.
-- Importacoes nao entram direto no fluxo sem validacao.
-- Duplicidades sao bloqueadas ou encaminhadas para revisao.
-- Historico registra quem alterou, quando alterou e o que mudou.
-- Campos sensiveis exigem confirmacao antes de alteracao.
+- A aplicação prioriza segurança operacional: dados sensíveis ficam fora do repositório.
+- Importações não entram direto no fluxo sem validação.
+- Duplicidades são bloqueadas ou encaminhadas para revisão.
+- Histórico registra quem alterou, quando alterou e o que mudou.
+- Campos sensíveis exigem confirmação antes de alteração.
 
 ## Como Apresentar
 
-Use screenshots anonimizadas, dados ficticios e um banco local descartavel. Evite imagens com nomes, documentos, processos, valores reais, IPs internos ou caminhos de maquina pessoal.
+Use screenshots anonimizadas, dados fictícios e um banco local descartável. Evite imagens com nomes, documentos, processos, valores reais, IPs internos ou caminhos de máquina pessoal.
 
-Sugestao de narrativa:
+Sugestão de narrativa:
 
-1. Contexto: controle operacional de pagamentos e pendencias.
+1. Contexto: controle operacional de pagamentos e pendências.
 2. Problema: planilhas e fluxos manuais geram risco de erro e baixa rastreabilidade.
-3. Solucao: aplicacao web com validacao, auditoria, dashboards e importacao assistida.
-4. Resultado tecnico: codigo modular, migrations, testes e isolamento de dados.
+3. Solução: aplicação web com validação, auditoria, dashboards e importação assistida.
+4. Resultado técnico: código modular, migrations, testes e isolamento de dados.

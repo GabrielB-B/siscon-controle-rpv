@@ -1,42 +1,42 @@
 # Arquitetura
 
-O projeto segue uma arquitetura Flask modular, separando interface web, persistencia, regras de negocio e rotinas de importacao.
+O projeto segue uma arquitetura Flask modular, separando interface web, persistência, regras de negócio e rotinas de importação.
 
 ## Camadas
 
 ```text
-routes       Recebem requests, validam formularios e coordenam respostas
-services     Concentraram regras de negocio, importacao, auditoria e notificacoes
+routes       Recebem requests, validam formulários e coordenam respostas
+services     Concentram regras de negócio, importação, auditoria e notificações
 models       Representam entidades persistidas via SQLAlchemy
 templates    Renderizam telas Jinja2
-static       Mantem CSS e JavaScript de interacao
+static       Mantém CSS e JavaScript de interação
 migrations   Evoluem o schema do banco com Alembic
-tests        Protegem regras fiscais, importacao, seguranca e fluxos web
+tests        Protegem regras fiscais, importação, segurança e fluxos web
 ```
 
-## Pontos Tecnicos
+## Pontos Técnicos
 
-- `create_app` centraliza a criacao da aplicacao.
-- Blueprints organizam modulos como autenticacao, dashboard, requisicoes individuais, pagamentos em lote, REINF, usuarios e historico.
+- `create_app` centraliza a criação da aplicação.
+- Blueprints organizam módulos como autenticação, dashboard, requisições individuais, pagamentos em lote, REINF, usuários e histórico.
 - SQLAlchemy modela entidades e relacionamentos.
-- Flask-Migrate registra evolucoes de schema.
-- Servicos encapsulam regras que nao pertencem diretamente a uma rota.
-- Auditoria registra snapshots antes/depois em alteracoes relevantes.
-- A configuracao usa variaveis de ambiente e `.env.example`.
+- Flask-Migrate registra evoluções de schema.
+- Serviços encapsulam regras que não pertencem diretamente a uma rota.
+- Auditoria registra snapshots antes/depois em alterações relevantes.
+- A configuração usa variáveis de ambiente e `.env.example`.
 
-## Fluxo De Dados
+## Fluxo de Dados
 
-1. O operador importa ou cadastra informacoes operacionais.
-2. Servicos validam documentos, valores, status e duplicidades.
-3. Registros aprovados sao persistidos no banco local configurado.
-4. Eventos criticos geram historico auditavel.
-5. Dashboards e telas de conferencia exibem dados consolidados.
+1. O operador importa ou cadastra informações operacionais.
+2. Serviços validam documentos, valores, status e duplicidades.
+3. Registros aprovados são persistidos no banco local configurado.
+4. Eventos críticos geram histórico auditável.
+5. Dashboards e telas de conferência exibem dados consolidados.
 
 ## Banco
 
-A versao publica nao inclui banco real. Em ambiente local, o banco padrao e criado em `instance/controle_rpv.db`, que esta protegido pelo `.gitignore`.
+A versão pública não inclui banco real. Em ambiente local, o banco padrão é criado em `instance/controle_rpv.db`, que está protegido pelo `.gitignore`.
 
-## Evolucao
+## Evolução
 
 As migrations permitem recriar a estrutura a partir de zero:
 

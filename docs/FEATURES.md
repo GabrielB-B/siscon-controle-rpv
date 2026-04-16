@@ -1,52 +1,52 @@
 # Funcionalidades
 
-## Requisicoes Individuais
+## Requisições Individuais
 
-RPV significa Requisicao de Pequeno Valor. Nesta frente, o sistema controla pagamentos judiciais tratados individualmente no fluxo financeiro.
+RPV significa Requisição de Pequeno Valor. Nesta frente, o sistema controla pagamentos judiciais tratados individualmente no fluxo financeiro.
 
-- Cadastro de processo e beneficiario.
-- Controle de valor bruto, IRRF, valor liquido e status de pagamento.
-- Validacao de documento CPF/CNPJ.
-- Identificacao de registros sem IRRF.
-- Pendencias documentais para casos incompletos.
-- Historico de alteracoes sensiveis.
+- Cadastro de processo e beneficiário.
+- Controle de valor bruto, IRRF, valor líquido e status de pagamento.
+- Validação de documento CPF/CNPJ.
+- Identificação de registros sem IRRF.
+- Pendências documentais para casos incompletos.
+- Histórico de alterações sensíveis.
 
-## Pagamentos Em Lote
+## Pagamentos em Lote
 
-Alguns pagamentos chegam agrupados em C.I.s e lotes. A aplicacao separa lote, item e beneficiario para permitir acompanhamento detalhado sem perder a visao do conjunto.
+Alguns pagamentos chegam agrupados em C.I.s e lotes. A aplicação separa lote, item e beneficiário para permitir acompanhamento detalhado sem perder a visão do conjunto.
 
-- Organizacao por C.I., lote e item.
-- Separacao de itens com IRRF, sem IRRF e pendentes.
-- Regras de destino automatico durante importacao.
-- Conferencia de duplicidades por documento e processo.
-- Edicao controlada de campos sensiveis.
+- Organização por C.I., lote e item.
+- Separação de itens com IRRF, sem IRRF e pendentes.
+- Regras de destino automático durante importação.
+- Conferência de duplicidades por documento e processo.
+- Edição controlada de campos sensíveis.
 
-## Importacao Assistida
+## Importação Assistida
 
 - Leitura de planilhas.
-- Normalizacao de documentos, datas, status e valores.
+- Normalização de documentos, datas, status e valores.
 - Bloqueio de duplicidades na planilha e no banco.
-- Conciliacao de registros em estado inicial.
-- Relatorios de saida para revisao operacional.
+- Conciliação de registros em estado inicial.
+- Relatórios de saída para revisão operacional.
 
 ## REINF E BI
 
-- Conferencia mensal e anual de pagamentos com IRRF.
-- Agrupamento por beneficiario e competencia.
-- Indicadores operacionais de status, pagamento e pendencias.
-- Filtros por responsavel, periodo, situacao e busca textual.
+- Conferência mensal e anual de pagamentos com IRRF.
+- Agrupamento por beneficiário e competência.
+- Indicadores operacionais de status, pagamento e pendências.
+- Filtros por responsável, período, situação e busca textual.
 
 ## Auditoria
 
-- Registro de usuario, data, hora e acao.
+- Registro de usuário, data, hora e ação.
 - Snapshot antes/depois de campos alterados.
-- Visualizacao em historico por entidade.
-- Destaque para alteracoes criticas e dados sensiveis.
+- Visualização em histórico por entidade.
+- Destaque para alterações críticas e dados sensíveis.
 
-## Usuarios E Acesso
+## Usuários e Acesso
 
 - Login com senha criptografada.
-- Perfis de usuario e administrador.
-- Troca obrigatoria de senha.
-- Recuperacao de senha por codigo.
+- Perfis de usuário e administrador.
+- Troca obrigatória de senha.
+- Recuperação de senha por código.
 - Controle de cadastro pendente.

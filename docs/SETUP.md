@@ -6,7 +6,7 @@
 - PowerShell no Windows
 - Git
 
-## Instalacao
+## Instalação
 
 ```powershell
 python -m venv .venv
@@ -23,7 +23,7 @@ flask db upgrade heads
 flask seed-data
 ```
 
-O banco sera criado em `instance/controle_rpv.db`. Essa pasta e ignorada pelo Git.
+O banco será criado em `instance/controle_rpv.db`. Essa pasta é ignorada pelo Git.
 
 ## Servidor HTTP
 
@@ -31,7 +31,7 @@ O banco sera criado em `instance/controle_rpv.db`. Essa pasta e ignorada pelo Gi
 python serve_local.py
 ```
 
-Endereco padrao:
+Endereço padrão:
 
 ```text
 http://127.0.0.1:8080/login
@@ -43,7 +43,7 @@ http://127.0.0.1:8080/login
 .\iniciar_servidor_https_local.ps1 -Port 8445 -ForceCert
 ```
 
-O certificado gerado fica em `instance/certs/`, tambem ignorado pelo Git.
+O certificado gerado fica em `instance/certs/`, também ignorado pelo Git.
 
 ## Testes
 
@@ -51,7 +51,7 @@ O certificado gerado fica em `instance/certs/`, tambem ignorado pelo Git.
 pytest
 ```
 
-## Variaveis Principais
+## Variáveis Principais
 
 ```text
 FLASK_APP=run.py
