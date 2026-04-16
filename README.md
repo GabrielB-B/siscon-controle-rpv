@@ -1,6 +1,6 @@
-# SISCON Controle RPV
+# SISCON Controle De RPVs
 
-Aplicacao web Flask desenvolvida para apoiar um fluxo real de controle financeiro/operacional de RPVs normais, dativos, pendencias documentais, conciliacao de importacoes e conferencia REINF.
+Aplicacao web Flask desenvolvida para apoiar um fluxo real de controle financeiro/operacional de RPVs, sigla para Requisicoes de Pequeno Valor. O sistema organiza requisicoes individuais, pagamentos agrupados em lotes, pendencias documentais, conciliacao de importacoes e conferencia REINF.
 
 O projeto nasceu para substituir controles dispersos em planilhas e verificacoes manuais por um sistema local com rastreabilidade, validacao de regras, historico de alteracoes e separacao segura entre codigo e dados sensiveis.
 
@@ -8,13 +8,13 @@ Esta versao foi preparada para portfolio publico. Ela demonstra arquitetura, reg
 
 ## Contexto
 
-Setores financeiros que lidam com pagamentos judiciais precisam conferir processos, beneficiarios, documentos, valores, imposto retido, status de empenho, ordens bancarias e informacoes de REINF. Quando esse fluxo depende apenas de planilhas, aumenta o risco de duplicidade, retrabalho, perda de historico e alteracoes sem rastreio.
+Setores financeiros que lidam com Requisicoes de Pequeno Valor precisam conferir processos, beneficiarios, documentos, valores, imposto retido, status de empenho, ordens bancarias e informacoes de REINF. Esses pagamentos podem aparecer como requisicoes individuais ou como grupos/lotes vinculados a uma comunicacao interna do setor. Quando esse fluxo depende apenas de planilhas, aumenta o risco de duplicidade, retrabalho, perda de historico e alteracoes sem rastreio.
 
 O sistema organiza esse processo em uma aplicacao web local, com foco em seguranca operacional e produtividade da equipe.
 
 ## Impactos Do Projeto
 
-- Centralizacao do acompanhamento de RPVs normais e dativos em uma interface unica.
+- Centralizacao do acompanhamento de requisicoes individuais e pagamentos em lote em uma interface unica.
 - Reducao de risco operacional por meio de validacao de documentos, valores, duplicidades e status.
 - Rastreabilidade de alteracoes criticas com historico por usuario, data, hora e campos modificados.
 - Maior seguranca para dados sensiveis, mantendo banco, planilhas, backups e segredos fora do Git.
@@ -24,7 +24,7 @@ O sistema organiza esse processo em uma aplicacao web local, com foco em seguran
 
 ## Destaques
 
-- Cadastro e acompanhamento de RPVs normais e dativos.
+- Cadastro e acompanhamento de Requisicoes de Pequeno Valor individuais e em lote.
 - Importacao assistida de planilhas com validacao, pendencias e relatorios de saida.
 - Regras fiscais para IRRF, casos sem retencao e conciliacao de pagamentos.
 - Auditoria de alteracoes com historico por usuario, data, hora e campos alterados.

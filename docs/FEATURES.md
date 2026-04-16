@@ -1,6 +1,8 @@
 # Funcionalidades
 
-## RPVs Normais
+## Requisicoes Individuais
+
+RPV significa Requisicao de Pequeno Valor. Nesta frente, o sistema controla pagamentos judiciais tratados individualmente no fluxo financeiro.
 
 - Cadastro de processo e beneficiario.
 - Controle de valor bruto, IRRF, valor liquido e status de pagamento.
@@ -9,7 +11,9 @@
 - Pendencias documentais para casos incompletos.
 - Historico de alteracoes sensiveis.
 
-## Dativos
+## Pagamentos Em Lote
+
+Alguns pagamentos chegam agrupados em C.I.s e lotes. A aplicacao separa lote, item e beneficiario para permitir acompanhamento detalhado sem perder a visao do conjunto.
 
 - Organizacao por C.I., lote e item.
 - Separacao de itens com IRRF, sem IRRF e pendentes.

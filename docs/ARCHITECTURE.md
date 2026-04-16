@@ -17,7 +17,7 @@ tests        Protegem regras fiscais, importacao, seguranca e fluxos web
 ## Pontos Tecnicos
 
 - `create_app` centraliza a criacao da aplicacao.
-- Blueprints organizam modulos como autenticacao, dashboard, RPVs, dativos, REINF, usuarios e historico.
+- Blueprints organizam modulos como autenticacao, dashboard, requisicoes individuais, pagamentos em lote, REINF, usuarios e historico.
 - SQLAlchemy modela entidades e relacionamentos.
 - Flask-Migrate registra evolucoes de schema.
 - Servicos encapsulam regras que nao pertencem diretamente a uma rota.
