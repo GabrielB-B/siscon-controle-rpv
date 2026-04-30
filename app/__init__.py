@@ -6,6 +6,7 @@ from flask_login import current_user
 
 from app.config import Config
 from app.extensions import db, migrate, login_manager
+from app.observability import init_observability
 from app.security import init_security
 from app.utils.formatters import moeda_br
 
@@ -15,6 +16,7 @@ def create_app():
     app.config.from_object(Config)
     os.makedirs(app.instance_path, exist_ok=True)
     init_security(app)
+    init_observability(app)
 
     app.jinja_env.filters["moeda_br"] = moeda_br
 
@@ -41,6 +43,7 @@ def create_app():
     from app.routes.cadastros import cadastros_bp
     from app.routes.dativos import dativos_bp
     from app.routes.historico import historico_bp
+    from app.routes.observability import observability_bp
     from app.routes.reinf import reinf_bp
     from app.routes.usuarios import usuarios_bp
 
@@ -52,6 +55,7 @@ def create_app():
     app.register_blueprint(cadastros_bp)
     app.register_blueprint(dativos_bp)
     app.register_blueprint(historico_bp)
+    app.register_blueprint(observability_bp)
     app.register_blueprint(reinf_bp)
     app.register_blueprint(usuarios_bp)
     

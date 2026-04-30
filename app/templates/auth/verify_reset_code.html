@@ -8,31 +8,24 @@
     <section class="auth-card auth-card-compact">
         <div class="auth-hero">
             {{ sisco.mark('auth') }}
-            <p class="auth-kicker">Validacao segura</p>
+            <p class="auth-kicker">Recuperacao de acesso</p>
             <h1 class="auth-title auth-title-sm">Informe o codigo</h1>
             <p class="auth-copy">
-                Digite o codigo de 6 digitos enviado para
+                Enviado por {{ contexto.channel|upper }} para
                 <strong>{{ contexto.masked_destination }}</strong>.
             </p>
-        </div>
-
-        <div class="auth-status-card">
-            <div class="auth-status-row">
-                <strong>Canal de envio</strong>
-                <span class="auth-countdown-chip">{{ contexto.channel|upper }}</span>
-            </div>
-            <div class="auth-status-row">
-                <span>Tempo restante para usar o codigo</span>
-                <strong class="auth-countdown-chip" data-reset-countdown="{{ contexto.seconds_remaining }}">
+            <p class="auth-timer-line">
+                Expira em
+                <strong data-reset-countdown="{{ contexto.seconds_remaining }}">
                     {{ "%02d:%02d"|format(contexto.seconds_remaining // 60, contexto.seconds_remaining % 60) }}
                 </strong>
-            </div>
+            </p>
         </div>
 
         <form method="POST" class="auth-form" autocomplete="one-time-code">
             {{ csrf_input() }}
             <div class="form-group">
-                <label for="codigo">Codigo de recuperacao</label>
+                <label for="codigo">Codigo</label>
                 <input
                     type="text"
                     id="codigo"
@@ -46,17 +39,13 @@
                     required
                     autofocus
                 >
-                <small id="codigo-ajuda" class="auth-helper-copy">
-                    Se o codigo expirar ou houver erro de digitacao, solicite um novo.
-                </small>
             </div>
 
-            <button type="submit">Validar codigo</button>
+            <button type="submit">Confirmar codigo</button>
         </form>
 
         <div class="auth-inline-meta auth-inline-meta-centered">
-            <a class="auth-link" href="{{ url_for('auth.forgot_password') }}">Solicitar novo codigo</a>
-            <span>Depois da validacao, voce podera definir a nova senha.</span>
+            <a class="auth-link" href="{{ url_for('auth.forgot_password') }}">Reenviar codigo</a>
         </div>
     </section>
 </div>

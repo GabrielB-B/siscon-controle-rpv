@@ -215,6 +215,10 @@
                 <strong>Pagamento lançado depois</strong><br>
                 A data do pagamento principal e a data do pagamento do IRRF ficam na tela de andamento do RPV, conforme o fluxo real de trabalho.
             </div>
+            <div class="form-group full-width">
+                <label for="observacoes">Observacoes</label>
+                <textarea id="observacoes" name="observacoes">{{ form_data.get('observacoes', '') }}</textarea>
+            </div>
         </div>
 
         {% if contexto_processo_existente %}
@@ -284,7 +288,7 @@
                 <button
                     type="submit"
                     class="btn"
-                    onclick="document.getElementById('confirmar_processo_existente').value='1';"
+                    onclick="document.getElementById('confirmar_processo_existente').value='1'; return confirm('Tem certeza que deseja continuar com este processo ja encontrado no sistema?');"
                 >
                     Confirmar e continuar mesmo assim
                 </button>
@@ -333,7 +337,7 @@
                 <button
                     type="submit"
                     class="btn"
-                    onclick="document.getElementById('confirmar_ci_existente').value='1';"
+                    onclick="document.getElementById('confirmar_ci_existente').value='1'; return confirm('Tem certeza que deseja continuar com esta C.I./eDOC repetida?');"
                 >
                     Confirmar C.I./eDOC repetida e continuar
                 </button>
@@ -352,7 +356,7 @@
             <button
                 type="submit"
                 class="btn btn-secondary"
-                onclick="document.getElementById('confirmar_processo_existente').value='1';"
+                onclick="document.getElementById('confirmar_processo_existente').value='1'; return confirm('Tem certeza que deseja continuar com este processo ja encontrado no sistema?');"
             >
                 Confirmar processo repetido e continuar
             </button>
@@ -362,7 +366,7 @@
             <button
                 type="submit"
                 class="btn btn-secondary"
-                onclick="document.getElementById('confirmar_ci_existente').value='1';"
+                onclick="document.getElementById('confirmar_ci_existente').value='1'; return confirm('Tem certeza que deseja continuar com esta C.I./eDOC repetida?');"
             >
                 Confirmar C.I./eDOC repetida e continuar
             </button>

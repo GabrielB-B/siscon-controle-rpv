@@ -1,3 +1,4 @@
+import base64
 import json
 import smtplib
 import ssl
@@ -18,6 +19,32 @@ class NotificationDeliveryError(RuntimeError):
 
 def _delivery_mode() -> str:
     return str(current_app.config.get("NOTIFICATION_DELIVERY_MODE", "file") or "file").strip().lower()
+
+
+def _brevo_sender_email() -> str:
+    return str(
+        current_app.config.get("BREVO_SENDER_EMAIL")
+        or current_app.config.get("EMAIL_FROM_ADDRESS")
+        or ""
+    ).strip()
+
+
+def channel_is_configured(channel: str) -> bool:
+    channel = str(channel or "").strip().lower()
+    mode = _delivery_mode()
+
+    if mode == "file":
+        return channel in {"email", "sms"}
+
+    if channel == "email":
+        if mode == "brevo_api":
+            return bool(current_app.config.get("BREVO_API_KEY") and _brevo_sender_email())
+        return bool(current_app.config.get("SMTP_HOST"))
+
+    if channel == "sms":
+        return bool(current_app.config.get("SMS_WEBHOOK_URL"))
+
+    return False
 
 
 def _outbox_dir() -> Path:
@@ -91,15 +118,84 @@ def _send_email_smtp(*, destination: str, subject: str, body: str):
         raise NotificationDeliveryError(f"Falha ao enviar email por SMTP: {exc}") from exc
 
 
+def _send_email_brevo_api(*, destination: str, subject: str, body: str) -> dict:
+    api_key = str(current_app.config.get("BREVO_API_KEY") or "").strip()
+    if not api_key:
+        raise NotificationDeliveryError("BREVO_API_KEY nao configurado para envio de email.")
+
+    sender_email = _brevo_sender_email()
+    if not sender_email:
+        raise NotificationDeliveryError("BREVO_SENDER_EMAIL nao configurado para envio de email.")
+
+    api_url = str(current_app.config.get("BREVO_API_URL") or "").strip()
+    if not api_url:
+        raise NotificationDeliveryError("BREVO_API_URL nao configurado para envio de email.")
+
+    sender_name = str(current_app.config.get("BREVO_SENDER_NAME") or "SISCON").strip() or "SISCON"
+    payload = json.dumps(
+        {
+            "sender": {"name": sender_name, "email": sender_email},
+            "to": [{"email": destination}],
+            "subject": subject,
+            "textContent": body,
+            "tags": ["siscon", "password-reset"],
+        }
+    ).encode("utf-8")
+    request = Request(
+        api_url,
+        data=payload,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "api-key": api_key,
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=15) as response:
+            status_code = getattr(response, "status", 200)
+            response_body = response.read().decode("utf-8", errors="ignore")
+            if status_code >= 400:
+                raise NotificationDeliveryError(
+                    f"Falha ao enviar email pela Brevo. Resposta do provedor: {status_code}."
+                )
+    except HTTPError as exc:
+        detalhes = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+        raise NotificationDeliveryError(
+            f"Falha ao enviar email pela Brevo. Resposta do provedor: {exc.code}. {detalhes}".strip()
+        ) from exc
+    except (URLError, OSError) as exc:
+        raise NotificationDeliveryError(f"Falha ao enviar email pela Brevo: {exc}") from exc
+
+    try:
+        parsed_response = json.loads(response_body or "{}")
+    except json.JSONDecodeError:
+        parsed_response = {}
+    return {"message_id": parsed_response.get("messageId")}
+
+
 def _send_sms_webhook(*, destination: str, body: str):
     webhook_url = str(current_app.config.get("SMS_WEBHOOK_URL") or "").strip()
     if not webhook_url:
-        raise NotificationDeliveryError("SMS_WEBHOOK_URL não configurado para envio de SMS.")
+        raise NotificationDeliveryError("SMS_WEBHOOK_URL nao configurado para envio de SMS.")
+
+    payload_style = str(current_app.config.get("SMS_WEBHOOK_PAYLOAD_STYLE") or "generic").strip().lower()
+    if payload_style == "gammu":
+        payload_data = {"number": destination, "text": body}
+    else:
+        payload_data = {"to": destination, "message": body}
 
     auth_token = str(current_app.config.get("SMS_WEBHOOK_AUTH_TOKEN") or "").strip()
-    payload = json.dumps({"to": destination, "message": body}).encode("utf-8")
+    auth_type = str(current_app.config.get("SMS_WEBHOOK_AUTH_TYPE") or "bearer").strip().lower()
+    payload = json.dumps(payload_data).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    if auth_token:
+    if auth_type == "basic":
+        username = str(current_app.config.get("SMS_WEBHOOK_USERNAME") or "").strip()
+        password = str(current_app.config.get("SMS_WEBHOOK_PASSWORD") or "").strip()
+        basic_token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {basic_token}"
+    elif auth_token:
         headers["Authorization"] = f"Bearer {auth_token}"
 
     request = Request(webhook_url, data=payload, headers=headers, method="POST")
@@ -136,6 +232,10 @@ def send_notification(
         )
 
     if channel == "email":
+        if mode == "brevo_api":
+            resultado = _send_email_brevo_api(destination=destination, subject=subject, body=body)
+            return {"channel": channel, "destination": destination, "mode": "brevo_api", **resultado}
+
         _send_email_smtp(destination=destination, subject=subject, body=body)
         return {"channel": channel, "destination": destination, "mode": "smtp"}
 

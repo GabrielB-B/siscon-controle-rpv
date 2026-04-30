@@ -12,32 +12,84 @@
             <p class="kicker">Painel inicial</p>
             <h1 class="hero-title">O que pede continuidade agora</h1>
             <p class="hero-copy">
-                Abertura mais direta para o dia: sua fila ativa, pendências fiscais e o quanto
-                já saiu no mês, com destaque próprio para o fluxo de dativos.
+                Leitura direta do que esta parado no setor, com foco em RPVs normais
+                e nos pontos que pedem continuidade imediata.
             </p>
 
             <div class="pill-row">
-                <span class="pill">Competência atual: {{ competencia_atual_legivel }}</span>
-                <span class="pill">Minha fila ativa: {{ fila_operacional.total_quantidade }}</span>
-                <span class="pill">Pendencias documentais: {{ total_pendencias_documentais }}</span>
-                <span class="pill">Alertas críticos de IRRF: {{ total_alertas_irrf }}</span>
-                <span class="pill">C.I.s ativas em dativos: {{ total_cis_dativos }}</span>
+                <span class="pill">Competencia atual: {{ competencia_atual_legivel }}</span>
+                <span class="pill">RPVs normais criticos: {{ resumo_setor_rpvs.total_quantidade }}</span>
+                <span class="pill">RPVs dativos criticos: {{ resumo_setor_dativos.total_quantidade }}</span>
+                <span class="pill">Responsaveis sinalizados: {{ total_responsaveis_sinalizados }}</span>
+                <span class="pill">Alertas criticos de IRRF: {{ total_alertas_irrf }}</span>
+            </div>
+
+            <div class="hero-board-grid">
+                <article class="hero-preview-card">
+                    <div class="hero-preview-head">
+                        <div>
+                            <p class="hero-preview-kicker">RPVs normais</p>
+                            <h2 class="hero-preview-title">{{ resumo_setor_rpvs.total_quantidade }} em continuidade</h2>
+                        </div>
+                        <a class="hero-preview-link" href="{{ url_for('cadastros.lista_rpvs', responsavel='todos') }}">Abrir</a>
+                    </div>
+                    <p class="hero-preview-meta">{{ resumo_setor_rpvs.total_responsaveis }} responsavel(is) sinalizado(s)</p>
+                    {% if resumo_setor_rpvs.totais %}
+                        <div class="hero-preview-chip-row">
+                            {% for total in resumo_setor_rpvs.totais %}
+                                <a class="priority-chip {{ total.css_class }}" href="{{ total.url }}">
+                                    <strong>{{ total.quantidade }}</strong>
+                                    <span>{{ total.label }}</span>
+                                </a>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <div class="empty-state empty-state-compact">
+                            Nenhum RPV normal apareceu nas situacoes priorizadas.
+                        </div>
+                    {% endif %}
+                </article>
+
+                <article class="hero-preview-card">
+                    <div class="hero-preview-head">
+                        <div>
+                            <p class="hero-preview-kicker">RPVs dativos</p>
+                            <h2 class="hero-preview-title">{{ resumo_setor_dativos.total_quantidade }} em continuidade</h2>
+                        </div>
+                        <a class="hero-preview-link" href="{{ url_for('dativos.lista_cis', responsavel='todos') }}">Abrir</a>
+                    </div>
+                    <p class="hero-preview-meta">{{ resumo_setor_dativos.total_responsaveis }} responsavel(is) sinalizado(s)</p>
+                    {% if resumo_setor_dativos.totais %}
+                        <div class="hero-preview-chip-row">
+                            {% for total in resumo_setor_dativos.totais %}
+                                <a class="priority-chip {{ total.css_class }}" href="{{ total.url }}">
+                                    <strong>{{ total.quantidade }}</strong>
+                                    <span>{{ total.label }}</span>
+                                </a>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <div class="empty-state empty-state-compact">
+                            Nenhum dativo apareceu nas situacoes priorizadas.
+                        </div>
+                    {% endif %}
+                </article>
             </div>
         </article>
 
-        <article class="card hero-side hero-side-card">
+        <article class="card hero-side hero-side-card hero-side-reinf-card">
             <div>
-                <p class="section-kicker">Prestação mensal</p>
+                <p class="section-kicker">Prestacao mensal</p>
                 <h2 class="hero-side-title">Fechamento REINF de {{ prestacao_mensal.competencia_legivel }}</h2>
                 <p class="hero-side-copy">
-                    Entram aqui somente pagamentos da competência em fechamento com IRRF. O restante da home
-                    ficou mais operacional para mostrar fila, pendências e gasto do mês.
+                    Entram aqui somente pagamentos da competencia em fechamento com IRRF.
+                    A sinalizacao geral de acompanhamento ficou concentrada nos blocos operacionais abaixo.
                 </p>
             </div>
 
             <div class="hero-stat-grid">
                 <article class="hero-stat-card">
-                    <span>Registros do mês</span>
+                    <span>Registros do mes</span>
                     <strong>{{ values.render_value(prestacao_mensal.total_registros, 'numero', 'inline') }}</strong>
                 </article>
                 <article class="hero-stat-card">
@@ -45,7 +97,7 @@
                     <strong>{{ values.render_value(prestacao_mensal.pendentes, 'numero', 'inline') }}</strong>
                 </article>
                 <article class="hero-stat-card">
-                    <span>Concluídos</span>
+                    <span>Concluidos</span>
                     <strong>{{ values.render_value(prestacao_mensal.concluidos, 'numero', 'inline') }}</strong>
                 </article>
                 <article class="hero-stat-card">
@@ -53,33 +105,106 @@
                     <strong>{{ values.render_value(prestacao_mensal.cancelados, 'numero', 'inline') }}</strong>
                 </article>
                 <article class="hero-stat-card">
-                    <span>IRRF do mês</span>
+                    <span>IRRF do mes</span>
                     <strong>{{ values.render_value(prestacao_mensal.valor_irrf, 'moeda', 'compact') }}</strong>
                 </article>
             </div>
 
             <div class="hero-side-actions">
-                <a class="btn btn-secondary" href="{{ prestacao_mensal.url }}">Abrir REINF da competência</a>
+                <a class="btn btn-secondary" href="{{ prestacao_mensal.url }}">Abrir REINF da competencia</a>
             </div>
         </article>
     </section>
 
-    <section class="metric-grid">
-        {% for card in cards %}
-            <article class="card metric-card">
-                <div class="metric-label">{{ card.label }}</div>
-                <div class="metric-value">{{ values.render_value(card.valor, card.tipo, 'metric') }}</div>
-                <div class="metric-note">{{ card.nota }}</div>
-                {% if card.valor_auxiliar is defined %}
-                    <div class="metric-aux">
-                        {% if card.rotulo_auxiliar is defined %}
-                            <span class="metric-aux-label">{{ card.rotulo_auxiliar }}</span>
-                        {% endif %}
-                        {{ values.render_value(card.valor_auxiliar, card.tipo_auxiliar, 'inline') }}
-                    </div>
-                {% endif %}
-            </article>
-        {% endfor %}
+    <section class="card sector-priority-card">
+        <div class="section-heading">
+            <div>
+                <p class="section-kicker">Visao geral do setor</p>
+                <h2>Sinalizacao geral de RPVs normais</h2>
+                <p class="section-caption">
+                    Detalhamento por responsavel das situacoes mais sensiveis. Cada chip abre o acompanhamento de RPVs normais ja filtrado.
+                </p>
+            </div>
+            <a class="btn btn-ghost" href="{{ url_for('cadastros.lista_rpvs', responsavel='todos') }}">Abrir acompanhamento</a>
+        </div>
+
+        {% if resumo_setor_rpvs.totais %}
+            <div class="owner-priority-grid owner-priority-grid-condensed">
+                {% for responsavel in resumo_setor_rpvs.usuarios %}
+                    <article class="owner-priority-card">
+                        <div class="owner-priority-head">
+                            <div>
+                                <p class="owner-priority-label">Responsavel</p>
+                                <h3>{{ responsavel.responsavel_nome }}</h3>
+                            </div>
+                            <a class="owner-priority-total" href="{{ responsavel.url }}">
+                                {{ responsavel.total }} em acompanhamento
+                            </a>
+                        </div>
+
+                        <div class="owner-priority-chip-row">
+                            {% for status in responsavel.status_items %}
+                                <a class="priority-chip {{ status.css_class }}" href="{{ status.url }}">
+                                    <strong>{{ status.quantidade }}</strong>
+                                    <span>{{ status.label }}</span>
+                                </a>
+                            {% endfor %}
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="empty-state">
+                Nenhum RPV normal apareceu nas situacoes priorizadas da home neste momento.
+            </div>
+        {% endif %}
+    </section>
+
+    <section class="card sector-priority-card">
+        <div class="section-heading">
+            <div>
+                <p class="section-kicker">Visao geral do setor</p>
+                <h2>Sinalizacao geral de RPVs dativos</h2>
+                <p class="section-caption">
+                    Detalhamento por responsavel dos lotes sem IRRF e dos itens com IRRF que ainda pedem continuidade.
+                </p>
+            </div>
+            <a class="btn btn-ghost" href="{{ url_for('dativos.lista_cis', responsavel='todos') }}">Abrir RPVs dativos</a>
+        </div>
+
+        {% if resumo_setor_dativos.totais %}
+            <div class="owner-priority-grid owner-priority-grid-condensed">
+                {% for responsavel in resumo_setor_dativos.usuarios %}
+                    <article class="owner-priority-card">
+                        <div class="owner-priority-head">
+                            <div>
+                                <p class="owner-priority-label">Responsavel</p>
+                                <h3>{{ responsavel.responsavel_nome }}</h3>
+                                <p class="owner-priority-support">
+                                    {{ responsavel.total_lotes }} lote(s) sem IRRF | {{ responsavel.total_itens }} item(ns) com IRRF
+                                </p>
+                            </div>
+                            <a class="owner-priority-total" href="{{ responsavel.url }}">
+                                {{ responsavel.total }} em acompanhamento
+                            </a>
+                        </div>
+
+                        <div class="owner-priority-chip-row">
+                            {% for status in responsavel.status_items %}
+                                <a class="priority-chip {{ status.css_class }}" href="{{ status.url }}">
+                                    <strong>{{ status.quantidade }}</strong>
+                                    <span>{{ status.label }}</span>
+                                </a>
+                            {% endfor %}
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="empty-state">
+                Nenhum dativo apareceu nas situacoes priorizadas da home neste momento.
+            </div>
+        {% endif %}
     </section>
 
     <section class="panel-grid">
@@ -87,7 +212,7 @@
             <div class="section-heading">
                 <div>
                     <p class="section-kicker">Minha continuidade</p>
-                    <h2>Fila ativa por módulo</h2>
+                    <h2>Fila ativa por modulo</h2>
                     <p class="section-caption">Somente o que ainda pede andamento sob sua responsabilidade.</p>
                 </div>
             </div>
@@ -120,9 +245,9 @@
         <article class="card">
             <div class="section-heading">
                 <div>
-                    <p class="section-kicker">Ação imediata</p>
-                    <h2>Pendências operacionais de IRRF</h2>
-                    <p class="section-caption">Cada linha abre no módulo correto para tratamento.</p>
+                    <p class="section-kicker">Acao imediata</p>
+                    <h2>Pendencias operacionais de IRRF</h2>
+                    <p class="section-caption">Cada linha abre no modulo correto para tratamento.</p>
                 </div>
             </div>
 
@@ -135,6 +260,7 @@
                                 <div class="stack-meta">
                                     {{ alerta.origem }} | {{ alerta.descricao }}
                                 </div>
+                                <div class="stack-meta">Responsavel: {{ alerta.responsavel }}</div>
                                 <div class="stack-meta">{{ alerta.meta }}</div>
                                 <span class="alert-badge">{{ alerta.acao }}</span>
                             </div>
@@ -146,76 +272,10 @@
                 </div>
             {% else %}
                 <div class="empty-state">
-                    Nenhuma pendência crítica de IRRF apareceu na leitura inicial da home.
+                    Nenhuma pendencia critica de IRRF apareceu na leitura inicial da home.
                 </div>
             {% endif %}
         </article>
-    </section>
-
-    <section class="card">
-        <div class="section-heading">
-            <div>
-                <p class="section-kicker">Dativos pagos</p>
-                <h2>Gasto de dativos em {{ dativos_mes.competencia_legivel }}</h2>
-                <p class="section-caption">
-                    Resumo do mês atual com recorte entre dativos sem IRRF e com IRRF, mais o histórico curto das últimas competências.
-                </p>
-            </div>
-            <a class="btn btn-ghost" href="{{ url_for('dativos.lista_cis') }}">Abrir RPVs dativos</a>
-        </div>
-
-        <div class="bi-inline-kpis bi-summary-cycle-grid">
-            <article class="bi-mini-stat">
-                <span>Total pago no mês</span>
-                <strong>{{ values.render_value(dativos_mes.total_valor, 'moeda', 'inline') }}</strong>
-            </article>
-            <article class="bi-mini-stat">
-                <span>Beneficiários pagos</span>
-                <strong>{{ values.render_value(dativos_mes.total_quantidade, 'numero', 'inline') }}</strong>
-            </article>
-            {% for grupo in dativos_mes.grupos %}
-                <article class="bi-mini-stat">
-                    <span>{{ grupo.label }}</span>
-                    <strong>{{ values.render_value(grupo.valor_total, 'moeda', 'inline') }}</strong>
-                </article>
-            {% endfor %}
-        </div>
-
-        {% if serie_dativos %}
-            <div class="stacked-month-grid">
-                {% for item in serie_dativos %}
-                    <article class="stacked-month-card">
-                        <div class="stacked-month-head">
-                            <span>{{ item.label }}</span>
-                            <strong>{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</strong>
-                        </div>
-                        <div class="stacked-month-track">
-                            <div class="stacked-month-column" style="height: {{ item.altura_percentual }}%;">
-                                {% for segmento in item.segmentos %}
-                                    {% if segmento.valor_total > 0 %}
-                                        <span
-                                            class="stacked-month-segment {{ segmento.css_class }}"
-                                            style="height: {{ segmento.percentual_interno }}%;"
-                                            title="{{ segmento.label }}: R$ {{ segmento.valor_total|moeda_br }}"
-                                        ></span>
-                                    {% endif %}
-                                {% endfor %}
-                            </div>
-                        </div>
-                        <div class="stacked-month-meta">{{ item.quantidade_total }} pagamento(s)</div>
-                    </article>
-                {% endfor %}
-            </div>
-
-            <div class="chart-legend">
-                <span><span class="legend-dot stack-segment-soft"></span>Dativos sem IRRF</span>
-                <span><span class="legend-dot stack-segment-strong"></span>Dativos com IRRF</span>
-            </div>
-        {% else %}
-            <div class="empty-state">
-                Ainda não há pagamentos de dativos suficientes para montar a série mensal.
-            </div>
-        {% endif %}
     </section>
 </div>
 {% endblock %}

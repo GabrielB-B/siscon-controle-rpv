@@ -1,6 +1,9 @@
+import json
+import re
 from functools import wraps
+from pathlib import Path
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import func
 
@@ -10,6 +13,8 @@ from app.utils.account_security import normalizar_email, validar_senha
 from app.utils.normalizers import normalizar_telefone, telefone_brasileiro_valido
 
 usuarios_bp = Blueprint("usuarios", __name__, url_prefix="/usuarios")
+
+RESET_CODE_PATTERN = re.compile(r"\b(\d{6})\b")
 
 
 def admin_required(view_func):
@@ -80,6 +85,52 @@ def _metricas_usuarios() -> list[dict]:
         {"label": "Administradores", "valor": admins, "nota": "Possuem acesso à gestão do sistema"},
         {"label": "Perfis pendentes", "valor": total_pendentes, "nota": "Ainda precisam completar o cadastro inicial"},
     ]
+
+
+def _notification_outbox_dir() -> Path:
+    return Path(
+        current_app.config.get(
+            "NOTIFICATION_OUTBOX_DIR",
+            Path(current_app.instance_path) / "notifications",
+        )
+    )
+
+
+def _codigo_recuperacao_from_body(body: str | None) -> str | None:
+    match = RESET_CODE_PATTERN.search(str(body or ""))
+    return match.group(1) if match else None
+
+
+def _listar_notificacoes_recuperacao_local(limit: int = 25) -> list[dict]:
+    outbox_dir = _notification_outbox_dir()
+    if not outbox_dir.exists():
+        return []
+
+    notificacoes: list[dict] = []
+    arquivos = sorted(outbox_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in arquivos:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if payload.get("type") != "password_reset_code":
+            continue
+
+        notificacoes.append(
+            {
+                "created_at": payload.get("created_at"),
+                "channel": payload.get("channel"),
+                "destination": payload.get("destination"),
+                "subject": payload.get("subject"),
+                "codigo": _codigo_recuperacao_from_body(payload.get("body")),
+                "file_name": path.name,
+            }
+        )
+        if len(notificacoes) >= limit:
+            break
+
+    return notificacoes
 
 
 def _salvar_usuario(usuario: User | None = None) -> User:
@@ -201,6 +252,18 @@ def lista():
     )
 
 
+@usuarios_bp.route("/notificacoes-recuperacao")
+@login_required
+@admin_required
+def notificacoes_recuperacao():
+    return render_template(
+        "usuarios/notificacoes_recuperacao.html",
+        notificacoes=_listar_notificacoes_recuperacao_local(),
+        outbox_dir=_notification_outbox_dir(),
+        delivery_mode=str(current_app.config.get("NOTIFICATION_DELIVERY_MODE", "file") or "file").lower(),
+    )
+
+
 @usuarios_bp.route("/novo", methods=["GET", "POST"])
 @login_required
 @admin_required
@@ -216,9 +279,10 @@ def novo():
         except ValueError as exc:
             db.session.rollback()
             flash(str(exc), "danger")
-        except Exception as exc:
+        except Exception:
             db.session.rollback()
-            flash(f"Erro ao criar usuário: {exc}", "danger")
+            current_app.logger.exception("Falha ao criar usuario via painel administrativo.")
+            flash("Nao foi possivel criar o usuario agora. Tente novamente.", "danger")
 
     return render_template(
         "usuarios/form.html",
@@ -244,9 +308,10 @@ def editar(usuario_id: int):
         except ValueError as exc:
             db.session.rollback()
             flash(str(exc), "danger")
-        except Exception as exc:
+        except Exception:
             db.session.rollback()
-            flash(f"Erro ao atualizar usuário: {exc}", "danger")
+            current_app.logger.exception("Falha ao atualizar usuario via painel administrativo.")
+            flash("Nao foi possivel atualizar o usuario agora. Tente novamente.", "danger")
 
     return render_template(
         "usuarios/form.html",
@@ -270,9 +335,13 @@ def meu_cadastro():
         except ValueError as exc:
             db.session.rollback()
             flash(str(exc), "danger")
-        except Exception as exc:
+        except Exception:
             db.session.rollback()
-            flash(f"Erro ao atualizar cadastro pessoal: {exc}", "danger")
+            current_app.logger.exception(
+                "Falha ao atualizar cadastro pessoal. usuario_id=%s",
+                getattr(current_user, "id", None),
+            )
+            flash("Nao foi possivel atualizar o cadastro pessoal agora. Tente novamente.", "danger")
 
     return render_template("usuarios/meu_cadastro.html", form_data=form_data)
 
@@ -303,8 +372,12 @@ def minha_senha():
         except ValueError as exc:
             db.session.rollback()
             flash(str(exc), "danger")
-        except Exception as exc:
+        except Exception:
             db.session.rollback()
-            flash(f"Erro ao atualizar senha: {exc}", "danger")
+            current_app.logger.exception(
+                "Falha ao atualizar senha do usuario. usuario_id=%s",
+                getattr(current_user, "id", None),
+            )
+            flash("Nao foi possivel atualizar a senha agora. Tente novamente.", "danger")
 
     return render_template("usuarios/minha_senha.html")

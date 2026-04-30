@@ -97,17 +97,64 @@ class PasswordResetService:
         return User.query.filter(User.ativo.is_(True)).filter(or_(*filtros)).first()
 
     @classmethod
-    def resolver_canal_recuperacao(
-        cls,
-        usuario: User,
-    ) -> tuple[str, str, str] | None:
+    def buscar_usuario_por_login(cls, login: str | None) -> User | None:
+        texto = str(login or "").strip().lower()
+        if not texto:
+            return None
+        return User.query.filter(func.lower(User.login) == texto, User.ativo.is_(True)).first()
+
+    @classmethod
+    def canais_recuperacao_disponiveis(cls, usuario: User) -> list[dict]:
+        canais = []
+
         email = normalizar_email(usuario.email)
         if email:
-            return "email", email, cls._mask_email(email)
+            canais.append(
+                {
+                    "channel": "email",
+                    "title": "Email cadastrado",
+                    "masked_destination": cls._mask_email(email),
+                }
+            )
 
         telefone = normalizar_telefone(usuario.telefone)
         if telefone:
-            return "sms", telefone, cls._mask_phone(telefone)
+            canais.append(
+                {
+                    "channel": "sms",
+                    "title": "SMS cadastrado",
+                    "masked_destination": cls._mask_phone(telefone),
+                }
+            )
+
+        return canais
+
+    @classmethod
+    def resolver_canal_recuperacao(
+        cls,
+        usuario: User,
+        preferred_channel: str | None = None,
+    ) -> tuple[str, str, str] | None:
+        canal_preferido = str(preferred_channel or "").strip().lower()
+
+        if canal_preferido == "email":
+            email = normalizar_email(usuario.email)
+            if email:
+                return "email", email, cls._mask_email(email)
+            return None
+
+        if canal_preferido == "sms":
+            telefone = normalizar_telefone(usuario.telefone)
+            if telefone:
+                return "sms", telefone, cls._mask_phone(telefone)
+            return None
+
+        for canal in cls.canais_recuperacao_disponiveis(usuario):
+            channel = canal["channel"]
+            if channel == "email":
+                return channel, normalizar_email(usuario.email), canal["masked_destination"]
+            if channel == "sms":
+                return channel, normalizar_telefone(usuario.telefone), canal["masked_destination"]
 
         return None
 
@@ -128,10 +175,14 @@ class PasswordResetService:
         usuario: User,
         request_ip: str | None,
         ttl_minutes: int | None = None,
+        preferred_channel: str | None = None,
     ) -> tuple[PasswordResetToken, str, str, str]:
-        canal_info = cls.resolver_canal_recuperacao(usuario)
+        canal_info = cls.resolver_canal_recuperacao(
+            usuario,
+            preferred_channel=preferred_channel,
+        )
         if not canal_info:
-            raise ValueError("Usuario sem email ou telefone para recuperacao.")
+            raise ValueError("Usuario sem contato valido para o canal de recuperacao solicitado.")
 
         canal, destino, destino_mascarado = canal_info
         challenge_token = secrets.token_urlsafe(16)

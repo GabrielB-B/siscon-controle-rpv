@@ -1,6 +1,5 @@
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from urllib.parse import urlsplit
 
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import login_required, current_user
@@ -28,6 +27,7 @@ from app.services.processo_crosscheck_service import ProcessoCrosscheckService
 from app.utils.normalizers import normalizar_documento, normalizar_numero_processo
 from app.utils.datetime_utils import utc_now_naive
 from app.utils.documentos import validar_documento_brasileiro
+from app.utils.navigation import current_internal_url, sanitize_internal_return_url
 from app.utils.payment_rules import (
     competencia_pagamento_automatica,
     data_pagamento_manual_exige_confirmacao,
@@ -361,10 +361,36 @@ def _render_novo_rpv(
 
 
 def _pode_acessar_pendencia_documental(pendencia: RPVPendenciaDocumento) -> bool:
-    return current_user.is_admin or current_user.id in {
-        pendencia.responsavel_id,
-        pendencia.criado_por_id,
-    }
+    return bool(
+        getattr(current_user, "is_authenticated", False)
+        and getattr(current_user, "ativo", False)
+    )
+
+
+def _filtro_responsavel_pendencia_documental(usuario_id: int):
+    return or_(
+        RPVPendenciaDocumento.responsavel_id == usuario_id,
+        RPVPendenciaDocumento.criado_por_id == usuario_id,
+    )
+
+
+def _aplicar_filtro_responsavel_pendencia_documental(query, filtro_responsavel: str):
+    filtro = str(filtro_responsavel or "").strip() or "todos"
+
+    if filtro == "meus":
+        return query.filter(
+            _filtro_responsavel_pendencia_documental(current_user.id)
+        ), "meus"
+
+    if filtro in {"", "todos"}:
+        return query, "todos"
+
+    if filtro.isdigit():
+        return query.filter(
+            _filtro_responsavel_pendencia_documental(int(filtro))
+        ), filtro
+
+    return query, "todos"
 
 
 def _carregar_pendencia_documental_da_requisicao() -> RPVPendenciaDocumento | None:
@@ -544,15 +570,7 @@ def _resumo_confirmacao_ci(registros_mesma_ci: list[RegistroRPV]) -> str:
 
 
 def _url_retorno_interna(padrao: str) -> str:
-    retorno = str(request.values.get("retorno") or "").strip()
-    if not retorno:
-        return padrao
-
-    partes = urlsplit(retorno)
-    if partes.scheme or partes.netloc or not retorno.startswith("/") or retorno.startswith("//"):
-        return padrao
-
-    return retorno
+    return sanitize_internal_return_url(request.values.get("retorno"), padrao)
 
 
 @cadastros_bp.route("/")
@@ -714,7 +732,11 @@ def lista_rpvs():
         if paginacao["tem_proxima"]
         else None
     )
-    busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(q or filtro_ne)
+    url_retorno_atual = current_internal_url(url_for("cadastros.lista_rpvs"))
+    busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(
+        q or filtro_ne,
+        retorno_url=url_retorno_atual,
+    )
     total_pendencias_documentais = (
         RPVPendenciaDocumento.query.filter(
             RPVPendenciaDocumento.status == "aberta",
@@ -724,7 +746,6 @@ def lista_rpvs():
             ),
         ).count()
     )
-    url_retorno_atual = request.full_path.rstrip("?")
     return render_template(
         "cadastros/lista_rpvs.html",
         registros=registros,
@@ -755,7 +776,7 @@ def lista_rpvs():
 @login_required
 def lista_pendencias_documentais():
     usuarios = User.query.filter_by(ativo=True).order_by(User.nome.asc()).all()
-    filtro_responsavel = request.args.get("responsavel", "meus").strip() or "meus"
+    filtro_responsavel = request.args.get("responsavel", "todos").strip() or "todos"
     filtro_status = request.args.get("status", "aberta").strip() or "aberta"
     filtro_q = request.args.get("q", "").strip()
 
@@ -781,31 +802,10 @@ def lista_pendencias_documentais():
             filtros_busca.append(RPVPendenciaDocumento.documento_normalizado.ilike(f"%{q_doc}%"))
         query = query.filter(or_(*filtros_busca))
 
-    if not current_user.is_admin:
-        query = query.filter(
-            or_(
-                RPVPendenciaDocumento.responsavel_id == current_user.id,
-                RPVPendenciaDocumento.criado_por_id == current_user.id,
-            )
-        )
-        if filtro_responsavel not in {"meus", "todos"}:
-            filtro_responsavel = "meus"
-    elif filtro_responsavel == "meus":
-        filtro_responsavel = "meus"
-        query = query.filter(
-            or_(
-                RPVPendenciaDocumento.responsavel_id == current_user.id,
-                RPVPendenciaDocumento.criado_por_id == current_user.id,
-            )
-        )
-    elif filtro_responsavel not in {"", "todos"} and filtro_responsavel.isdigit():
-        usuario_id = int(filtro_responsavel)
-        query = query.filter(
-            or_(
-                RPVPendenciaDocumento.responsavel_id == usuario_id,
-                RPVPendenciaDocumento.criado_por_id == usuario_id,
-            )
-        )
+    query, filtro_responsavel = _aplicar_filtro_responsavel_pendencia_documental(
+        query,
+        filtro_responsavel,
+    )
 
     pendencias = query.all()
     total_abertas = sum(1 for pendencia in pendencias if pendencia.status == "aberta")
@@ -1439,7 +1439,7 @@ def novo_rpv():
                 reinf_status=None,
                 ob_imposto=None,
                 historico_auto="",
-                observacoes=None,
+                observacoes=dados["observacoes"],
                 ativo=True,
                 criado_por_id=current_user.id,
                 atualizado_por_id=current_user.id,

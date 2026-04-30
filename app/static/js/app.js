@@ -12,6 +12,7 @@ const ALL_STATUS_CLASSES = [
     "status-rpv-05", "status-rpv-06", "status-rpv-07", "status-rpv-08",
     "status-rpv-09", "status-rpv-10", "status-rpv-11", "status-rpv-12",
     "status-rpv-13", "status-rpv-14", "status-rpv-15", "status-rpv-16",
+    "status-rpv-17",
     "status-irrf-01", "status-irrf-02", "status-irrf-03", "status-irrf-04",
     "status-irrf-05", "status-irrf-06", "status-irrf-07", "status-irrf-08",
 ];
@@ -41,6 +42,7 @@ function resolveStatusClass(label, selectName) {
         "SE APROVADA - GERAR NE": "status-rpv-04",
         "NE AGUARDANDO ASSINATURA": "status-rpv-05",
         "VD A LIQUIDAR": "status-rpv-06",
+        "VD LIQUIDADA": "status-rpv-17",
         "PD EM LOTE CARREGADA": "status-rpv-07",
         "PD GERADA - SEFAZ": "status-rpv-08",
         "PAGAMENTO - OB GERADA": "status-rpv-09",

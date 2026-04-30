@@ -1,6 +1,5 @@
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from urllib.parse import urlsplit
 
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import login_required, current_user
@@ -26,6 +25,7 @@ from app.services.payment_reference_service import (
     validar_referencias_pagamento_principal,
 )
 from app.services.processo_crosscheck_service import ProcessoCrosscheckService
+from app.utils.navigation import current_internal_url, sanitize_internal_return_url
 from app.utils.normalizers import normalizar_documento, normalizar_numero_processo
 from app.utils.payment_rules import (
     competencia_pagamento_automatica,
@@ -50,15 +50,7 @@ dativos_bp = Blueprint("dativos", __name__, url_prefix="/dativos")
 
 
 def _url_retorno_interna(padrao: str) -> str:
-    retorno = str(request.values.get("retorno") or "").strip()
-    if not retorno:
-        return padrao
-
-    partes = urlsplit(retorno)
-    if partes.scheme or partes.netloc or not retorno.startswith("/") or retorno.startswith("//"):
-        return padrao
-
-    return retorno
+    return sanitize_internal_return_url(request.values.get("retorno"), padrao)
 
 
 def parse_date(valor: str):
@@ -289,6 +281,45 @@ def _resumo_confirmacao_processo(ocorrencias_processo: list[dict]) -> str:
     return resumo
 
 
+def _metadados_preview_importacao(modo: str) -> dict:
+    configuracoes = {
+        "unico": {
+            "modo_importacao": "unico",
+            "titulo_preview": "Previa da planilha unica",
+            "descricao_preview": (
+                "Revise a classificacao automatica e confirme apenas o que deve entrar agora."
+            ),
+            "acao_historico": "Importacao unica assistida",
+            "mensagem_conclusao": "Importacao automatica concluida.",
+        },
+        "sem_irrf": {
+            "modo_importacao": "sem_irrf",
+            "titulo_preview": "Previa da importacao sem IRRF",
+            "descricao_preview": (
+                "A planilha encontrou repeticoes ou ocorrencias de processo que exigem confirmacao explicita antes da gravacao."
+            ),
+            "acao_historico": "Importacao sem IRRF assistida",
+            "mensagem_conclusao": "Importacao sem IRRF concluida.",
+        },
+        "com_irrf": {
+            "modo_importacao": "com_irrf",
+            "titulo_preview": "Previa da importacao com IRRF",
+            "descricao_preview": (
+                "A planilha encontrou repeticoes ou ocorrencias de processo que exigem confirmacao explicita antes da gravacao."
+            ),
+            "acao_historico": "Importacao com IRRF assistida",
+            "mensagem_conclusao": "Importacao com IRRF concluida.",
+        },
+    }
+    return dict(configuracoes.get(modo, configuracoes["unico"]))
+
+
+def _preparar_preview_importacao(preview: dict, *, modo: str) -> dict:
+    payload = dict(preview)
+    payload.update(_metadados_preview_importacao(modo))
+    return payload
+
+
 @dativos_bp.route("/")
 @login_required
 def index():
@@ -342,7 +373,7 @@ def lista_cis():
 
     cis = query.order_by(DativoCI.data_ci.desc(), DativoCI.criado_em.desc()).all()
 
-    url_retorno_atual = request.full_path.rstrip("?")
+    url_retorno_atual = current_internal_url(url_for("dativos.lista_cis"))
     linhas = []
     cis_incompletas = []
     total_lotes = 0
@@ -593,7 +624,10 @@ def lista_cis():
         if paginacao["tem_proxima"]
         else None
     )
-    busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(q)
+    busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(
+        q,
+        retorno_url=url_retorno_atual,
+    )
     return render_template(
         "dativos/lista_cis.html",
         linhas=linhas_paginadas,
@@ -824,6 +858,12 @@ def detalhe_ci(ci_id):
         if importacao_unica_preview is None:
             flash("A prévia da planilha única não foi encontrada ou expirou.", "warning")
 
+    if importacao_unica_preview is not None:
+        importacao_unica_preview = _preparar_preview_importacao(
+            importacao_unica_preview,
+            modo=str(importacao_unica_preview.get("modo_importacao") or "unico"),
+        )
+
     return _render_detalhe_ci(
         dativo_ci,
         importacao_unica_preview=importacao_unica_preview,
@@ -845,11 +885,52 @@ def importar_sem_irrf(ci_id):
         if not arquivo.filename.lower().endswith(".ods"):
             raise ValueError("O arquivo deve estar no formato .ods")
 
-        resultado = DativosImportService.importar_ods_sem_irrf(
+        preview = DativosImportService.analisar_ods_grupo_fixo(
             arquivo=arquivo,
             dativo_ci=dativo_ci,
+            grupo="sem_irrf",
+        )
+        preview = _preparar_preview_importacao(preview, modo="sem_irrf")
+
+        if preview["resumo"]["total_pendencias"]:
+            preview_token = DativosImportService.salvar_previa_importacao_unica(
+                preview=preview,
+                dativo_ci_id=dativo_ci.id,
+                usuario_id=current_user.id,
+                nome_arquivo=arquivo.filename,
+            )
+            flash(
+                (
+                    "A importacao sem IRRF encontrou casos com possibilidade de repeticao. "
+                    "Revise a previa e confirme explicitamente apenas o que deve entrar."
+                ),
+                "warning",
+            )
+            if preview["erros"]:
+                flash(
+                    "Algumas linhas tiveram erro: " + " | ".join(preview["erros"][:5]),
+                    "info",
+                )
+            return redirect(
+                url_for(
+                    "dativos.detalhe_ci",
+                    ci_id=dativo_ci.id,
+                    preview_token=preview_token,
+                )
+            )
+
+        resultado = DativosImportService.aplicar_previa_importacao_unica(
+            dativo_ci=dativo_ci,
+            preview=preview,
             usuario_id=current_user.id,
         )
+        resultado = {
+            "importados": resultado["importados_total"],
+            "ignorados": resultado["pendencias_descartadas"],
+            "rodapes_ignorados": preview["resumo"]["rodapes_ignorados"],
+            "alertas_processo_existente": [],
+            "erros": preview["erros"],
+        }
 
         registrar_evento(
             entidade_tipo="dativo_ci",
@@ -912,11 +993,52 @@ def importar_com_irrf(ci_id):
         if not arquivo.filename.lower().endswith(".ods"):
             raise ValueError("O arquivo deve estar no formato .ods")
 
-        resultado = DativosImportService.importar_ods_com_irrf(
+        preview = DativosImportService.analisar_ods_grupo_fixo(
             arquivo=arquivo,
             dativo_ci=dativo_ci,
+            grupo="com_irrf",
+        )
+        preview = _preparar_preview_importacao(preview, modo="com_irrf")
+
+        if preview["resumo"]["total_pendencias"]:
+            preview_token = DativosImportService.salvar_previa_importacao_unica(
+                preview=preview,
+                dativo_ci_id=dativo_ci.id,
+                usuario_id=current_user.id,
+                nome_arquivo=arquivo.filename,
+            )
+            flash(
+                (
+                    "A importacao com IRRF encontrou casos com possibilidade de repeticao. "
+                    "Revise a previa e confirme explicitamente apenas o que deve entrar."
+                ),
+                "warning",
+            )
+            if preview["erros"]:
+                flash(
+                    "Algumas linhas tiveram erro: " + " | ".join(preview["erros"][:5]),
+                    "info",
+                )
+            return redirect(
+                url_for(
+                    "dativos.detalhe_ci",
+                    ci_id=dativo_ci.id,
+                    preview_token=preview_token,
+                )
+            )
+
+        resultado = DativosImportService.aplicar_previa_importacao_unica(
+            dativo_ci=dativo_ci,
+            preview=preview,
             usuario_id=current_user.id,
         )
+        resultado = {
+            "importados": resultado["importados_total"],
+            "ignorados": resultado["pendencias_descartadas"],
+            "rodapes_ignorados": preview["resumo"]["rodapes_ignorados"],
+            "alertas_processo_existente": [],
+            "erros": preview["erros"],
+        }
 
         registrar_evento(
             entidade_tipo="dativo_ci",
@@ -982,6 +1104,7 @@ def analisar_importacao_unica(ci_id):
             arquivo=arquivo,
             dativo_ci=dativo_ci,
         )
+        preview = _preparar_preview_importacao(preview, modo="unico")
         preview_token = DativosImportService.salvar_previa_importacao_unica(
             preview=preview,
             dativo_ci_id=dativo_ci.id,
@@ -1037,6 +1160,10 @@ def confirmar_importacao_unica(ci_id):
         )
         if preview is None:
             raise ValueError("A previa dessa importacao nao esta mais disponivel.")
+        preview = _preparar_preview_importacao(
+            preview,
+            modo=str(preview.get("modo_importacao") or "unico"),
+        )
 
         pendencias_confirmadas = set(request.form.getlist("pendencias_confirmadas"))
         resultado = DativosImportService.aplicar_previa_importacao_unica(
@@ -1050,7 +1177,7 @@ def confirmar_importacao_unica(ci_id):
             entidade_tipo="dativo_ci",
             entidade_id=dativo_ci.id,
             usuario_id=current_user.id,
-            acao="Importacao unica assistida",
+            acao=preview["acao_historico"],
             antes=antes_ci,
             depois=snapshot_entidade("dativo_ci", dativo_ci),
             resumo=(
@@ -1067,7 +1194,7 @@ def confirmar_importacao_unica(ci_id):
 
         flash(
             (
-                "Importacao automatica concluida. "
+                f"{preview['mensagem_conclusao']} "
                 f"Sem IRRF: {resultado['importados_sem_irrf']} | "
                 f"Com IRRF: {resultado['importados_com_irrf']} | "
                 f"Pendencias confirmadas: {resultado['pendencias_confirmadas']}"
@@ -1108,6 +1235,7 @@ def adicionar_item_sem_irrf(ci_id):
         nome_beneficiario = request.form.get("nome_beneficiario", "").strip()
         cpf_original = request.form.get("cpf_original", "").strip()
         numero_processo = request.form.get("numero_processo", "").strip()
+        observacoes = request.form.get("observacoes", "").strip() or None
         ocorrencias_processo = ProcessoCrosscheckService.buscar_ocorrencias(numero_processo)
         confirmar_processo_existente = (
             request.form.get("confirmar_processo_existente") == "1"
@@ -1144,6 +1272,7 @@ def adicionar_item_sem_irrf(ci_id):
             numero_processo=numero_processo,
             valor_bruto=valor_bruto,
             usuario_id=current_user.id,
+            observacoes=observacoes,
             permitir_duplicidade_confirmada=confirmar_processo_existente,
         )
 
@@ -1196,6 +1325,7 @@ def adicionar_item_com_irrf(ci_id):
         nome_beneficiario = request.form.get("nome_beneficiario", "").strip()
         cpf_original = request.form.get("cpf_original", "").strip()
         numero_processo = request.form.get("numero_processo", "").strip()
+        observacoes = request.form.get("observacoes", "").strip() or None
         ocorrencias_processo = ProcessoCrosscheckService.buscar_ocorrencias(numero_processo)
         confirmar_processo_existente = (
             request.form.get("confirmar_processo_existente") == "1"
@@ -1231,6 +1361,7 @@ def adicionar_item_com_irrf(ci_id):
             valor_bruto=valor_bruto,
             valor_irrf=valor_irrf,
             usuario_id=current_user.id,
+            observacoes=observacoes,
             permitir_duplicidade_confirmada=confirmar_processo_existente,
         )
 
@@ -1270,7 +1401,7 @@ def lotes_sem_irrf():
     situacoes_rpv, situacoes_imposto = carregar_situacoes()
     situacoes_rpv_ocultas = collect_hidden_queue_status_ids(situacoes_rpv)
     usuarios = _carregar_usuarios_ativos()
-    url_retorno_atual = request.full_path.rstrip("?")
+    url_retorno_atual = current_internal_url(url_for("dativos.lista_cis"))
 
     q = request.args.get("q", "").strip()
     exercicio = request.args.get("exercicio", "").strip()
@@ -1345,7 +1476,10 @@ def lotes_sem_irrf():
 
         lotes = lotes_filtrados
 
-    busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(busca)
+    busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(
+        busca,
+        retorno_url=url_retorno_atual,
+    )
 
     return render_template(
         "dativos/lotes.html",
@@ -1382,6 +1516,7 @@ def novo_item_lote(lote_id):
             cpf_original = request.form.get("cpf_original", "").strip()
             numero_processo = request.form.get("numero_processo", "").strip()
             valor_bruto_raw = request.form.get("valor_bruto", "").strip()
+            observacoes = request.form.get("observacoes", "").strip() or None
             confirmar_processo_existente = request.form.get("confirmar_processo_existente") == "1"
             ocorrencias_processo = ProcessoCrosscheckService.buscar_ocorrencias(numero_processo)
             duplicidade_existente = DativosService.buscar_duplicidade_item(
@@ -1416,6 +1551,7 @@ def novo_item_lote(lote_id):
                 numero_processo=numero_processo,
                 valor_bruto=valor_bruto,
                 usuario_id=current_user.id,
+                observacoes=observacoes,
                 permitir_duplicidade_confirmada=confirmar_processo_existente,
             )
 
@@ -1484,6 +1620,7 @@ def editar_item_lote(lote_id, item_id):
             cpf_original = request.form.get("cpf_original", "").strip()
             numero_processo = request.form.get("numero_processo", "").strip()
             valor_bruto = parse_decimal(request.form.get("valor_bruto", "").strip())
+            observacoes = request.form.get("observacoes", "").strip() or None
             dispensa_irrf_confirmada = request.form.get("dispensa_irrf_confirmada") == "1"
             confirmar_processo_existente = (
                 request.form.get("confirmar_processo_existente") == "1"
@@ -1544,6 +1681,7 @@ def editar_item_lote(lote_id, item_id):
                 numero_processo=numero_processo,
                 valor_bruto=valor_bruto,
                 usuario_id=current_user.id,
+                observacoes=observacoes,
                 dispensa_irrf_confirmada=dispensa_irrf_confirmada,
                 permitir_duplicidade_confirmada=confirmar_processo_existente,
             )
@@ -1898,7 +2036,7 @@ def itens_com_irrf():
     ne = request.args.get("ne", "").strip()
     exercicio = request.args.get("exercicio", "").strip()
     responsavel = request.args.get("responsavel", "meus").strip() or "meus"
-    url_retorno_atual = request.full_path.rstrip("?")
+    url_retorno_atual = current_internal_url(url_for("dativos.itens_com_irrf"))
     situacao_rpv_id = request.args.get("situacao_rpv_id", "").strip()
     situacao_imposto_id = request.args.get("situacao_imposto_id", "").strip()
     mostrar_encerrados = should_include_closed_in_queue(
@@ -1967,7 +2105,10 @@ def itens_com_irrf():
         query = query.filter(or_(*filtros))
 
     itens = query.order_by(DativoCI.data_ci.desc(), DativoItem.nome_beneficiario.asc()).all()
-    busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(q or ne)
+    busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(
+        q or ne,
+        retorno_url=url_retorno_atual,
+    )
 
     return render_template(
         "dativos/itens.html",

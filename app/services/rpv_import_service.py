@@ -39,6 +39,10 @@ def _nk(value) -> str:
     return unidecode(str(value or "").strip()).upper()
 
 
+def _nk_compacto(value) -> str:
+    return re.sub(r"\s+", " ", _nk(value))
+
+
 def _texto_planilha(value) -> str:
     if value is None:
         return ""
@@ -160,15 +164,12 @@ def _normalizar_documento_importacao(raw) -> tuple[str | None, str | None, str, 
 
 def _mapear_elaborador(raw: str | None) -> tuple[str | None, str | None]:
     mapa = {
-        "OPERADOR A": "Operador A",
-        "OPERADOR_A": "Operador A",
-        "OPERADOR B": "Operador B",
-        "OPERADOR_B": "Operador B",
-        "OPERADOR C": "Operador C",
-        "OPERADOR_C": "Operador C",
-        "OPERADOR D": "Operador D",
-        "OPERADOR_D": "Operador D",
-        "LE": "Operador C",
+        "GABRIEL": "Gabriel Bomfim Bispo",
+        "MARINA": "Marina Bastos",
+        "EGESILDA": "Egesilda Santos",
+        "LEONARDO": "Leonardo Freitas",
+        "LEONARDO FREITAS": "Leonardo Freitas",
+        "LE": "Adeildes Conceição Cruz",
     }
     chave = _nk(raw)
     return mapa.get(chave), None if chave in mapa else "Elaborador sem mapeamento"
@@ -178,13 +179,21 @@ def _mapear_tipo(raw: str | None) -> tuple[str | None, str | None]:
     mapa = {
         "CUSTEIO": "RPV custeio",
         "RPV_CUSTEIO": "RPV custeio",
+        "HONORARIOS": "RPV honorários",
         "RPV-HONORARIOS": "RPV honorários",
         "RPV-PESSOAL": "RPV pessoal",
         "PESSOAL": "RPV pessoal",
+        "TRABALHISTA": "RPV trabalhista",
+        "RPV-TRABALHISTA": "RPV trabalhista",
         "RPV -TRABALHISTA": "RPV trabalhista",
+        "PERICIAL": "RPV periciais",
+        "PERICIAIS": "RPV periciais",
+        "RPV-PERICIAL": "RPV periciais",
+        "RPV-PERICIAIS": "RPV periciais",
         "RPV - PERICIAIS": "RPV periciais",
         "RPV-FEDERAL": "RPV federal",
         "GUIA-DE-CUSTAS": "Guia de custas",
+        "INDENIZACAO": "Indenização",
         "RPV - INDENIZACAO": "Indenização",
         "RPV-DANOS MORAIS": "Danos Morais",
         "RPV - DANOS MORAIS": "Danos Morais",
@@ -206,11 +215,15 @@ def _mapear_situacao_empenho(raw: str | None) -> tuple[str | None, str | None]:
         "AGUARDANDO RETORNO BANCO": "Aguardando Retorno Banco",
         "SE AGUARDANDO APROVACAO": "SE Aguardando Aprovação",
         "GUIAS GERADAS": "Guias Geradas",
+        "VD  A LIQUIDAR": "VD à Liquidar",
+        "VD A LIQUIDAR": "VD à Liquidar",
         "AGUARDANDO ASSINATURA DA OB": "Aguardando Assinatura da OB",
     }
-    chave = _nk(raw)
+    chave = _nk_compacto(raw)
     if not chave:
         return None, "Situação de empenho ausente"
+    if chave == "VD LIQUIDADA":
+        return "VD Liquidada", None
     destino = mapa.get(chave)
     if destino:
         return destino, None
@@ -1004,7 +1017,7 @@ def escrever_relatorios_saida(
         "- Registros com processo repetido foram separados para tratamento manual e nao entram automaticamente.",
         "- CPFs com menos de 11 digitos foram ajustados com zero a esquerda.",
         "- CNPJs foram preservados como documento valido.",
-        "- O elaborador `LE` foi mapeado para `Operador C`.",
+        "- O elaborador `Lê` foi mapeado para `Adeildes Conceição Cruz`.",
         "- Status `Concluída` e `Pago` receberam data de pagamento no primeiro dia do mes de referencia.",
     ]
     if import_stats:

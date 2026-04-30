@@ -1,6 +1,6 @@
 param(
     [string]$ServerIp,
-    [int]$Port = 8445,
+    [int]$Port = 8443,
     [switch]$ForceCert
 )
 

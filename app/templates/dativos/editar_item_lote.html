@@ -25,7 +25,7 @@
             type="hidden"
             name="confirmar_processo_existente"
             id="confirmar_processo_existente"
-            value="{{ form_data.get('confirmar_processo_existente', '0') }}"
+            value="0"
         >
         <input
             type="hidden"
@@ -97,6 +97,11 @@
         </div>
         {% endif %}
 
+        <div class="form-group">
+            <label for="observacoes">Observacoes</label>
+            <textarea id="observacoes" name="observacoes">{{ form_data.get('observacoes', item.observacoes or '') }}</textarea>
+        </div>
+
         {% if ocorrencias_processo %}
         <div class="section-card warning-panel content-top-14">
             <h3 class="section-card-title">Processo já encontrado no sistema</h3>
@@ -139,7 +144,7 @@
                 <button
                     type="submit"
                     class="btn"
-                    onclick="document.getElementById('confirmar_processo_existente').value='1';"
+                    onclick="document.getElementById('confirmar_processo_existente').value='1'; return confirm('Tem certeza que deseja continuar mesmo com possibilidade de processo repetido?');"
                 >
                     Confirmar e continuar mesmo assim
                 </button>

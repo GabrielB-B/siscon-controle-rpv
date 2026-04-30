@@ -5,6 +5,7 @@ from sqlalchemy.orm import joinedload
 from unidecode import unidecode
 
 from app.models import DativoCI, DativoItem, Processo, RegistroRPV, RPVPendenciaDocumento
+from app.utils.navigation import append_internal_return_url
 from app.utils.normalizers import normalizar_documento, normalizar_numero_processo
 
 
@@ -432,10 +433,33 @@ class ProcessoCrosscheckService:
         return ocorrencias
 
     @staticmethod
-    def buscar_contexto_pesquisa(numero_processo: str):
+    def _aplicar_retorno_ocorrencia(ocorrencia: dict, retorno_url: str | None) -> dict:
+        if not retorno_url:
+            return ocorrencia
+
+        resultado = dict(ocorrencia)
+        for campo in ("abrir_url", "ci_url", "lote_url"):
+            if resultado.get(campo):
+                resultado[campo] = append_internal_return_url(
+                    resultado.get(campo),
+                    retorno_url,
+                )
+        return resultado
+
+    @staticmethod
+    def buscar_contexto_pesquisa(numero_processo: str, *, retorno_url: str | None = None):
         ocorrencias = ProcessoCrosscheckService.buscar_ocorrencias_pesquisa(numero_processo)
         if not ocorrencias:
             return None
+
+        if retorno_url:
+            ocorrencias = [
+                ProcessoCrosscheckService._aplicar_retorno_ocorrencia(
+                    ocorrencia,
+                    retorno_url,
+                )
+                for ocorrencia in ocorrencias
+            ]
 
         rpvs_normais = []
         pendencias_documentais = []

@@ -1,15 +1,20 @@
-﻿import unittest
+import unittest
 from datetime import date, datetime, timedelta
 import json
+import sqlite3
 import shutil
 import tempfile
 from decimal import Decimal
+from time import time
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 import re
 from uuid import uuid4
+from unittest.mock import patch
 
 from flask import Flask, g
 import pandas as pd
+from sqlalchemy import inspect as sa_inspect
 from app.extensions import db, login_manager
 from app.models import (
     DativoCI,
@@ -25,11 +30,14 @@ from app.models import (
     TipoRPV,
     User,
 )
+from app.observability import init_observability
 from app.routes.auth import auth_bp
 from app.routes.cadastros import cadastros_bp, precisa_alerta_irrf
 from app.routes.dashboard import (
     _cards_bi,
     _coletar_dataset_bi,
+    _query_dativos_bi,
+    _query_registros_bi,
     _resumo_grupos_cota,
     _resumo_irrf_bi,
     _series_grupos_cota_bi,
@@ -37,21 +45,42 @@ from app.routes.dashboard import (
 )
 from app.routes.dativos import dativos_bp
 from app.routes.historico import historico_bp
-from app.routes.reinf import _coletar_base_reinf, reinf_bp
+from app.routes.observability import observability_bp
+from app.routes.reinf import _coletar_base_reinf, _query_dativos_reinf, _query_rpvs_reinf, reinf_bp
 from app.routes.usuarios import usuarios_bp
 from app.services.irrf_calculator import calcular_irrf_operacional
+from app.services.notification_service import send_notification
 from app.services.password_reset_service import PasswordResetService
 from app.security import init_security
 from app.utils.datetime_utils import utc_now_naive
 from app.utils.formatters import formatar_documento_br, moeda_br
+from app.utils.request_throttle import request_throttle
+
+
+class FakeHTTPResponse:
+    def __init__(self, body: str = "{}", status: int = 200):
+        self._body = body.encode("utf-8")
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self):
+        return self._body
 
 
 class RPVSemIRRFTestCase(unittest.TestCase):
     def setUp(self):
         self.notification_outbox = tempfile.mkdtemp(prefix="siscon-notifications-")
+        self.instance_dir = tempfile.mkdtemp(prefix="siscon-instance-")
+        request_throttle.clear_all()
         self.app = Flask(
             __name__,
             template_folder=str(Path(__file__).resolve().parents[1] / "app" / "templates"),
+            instance_path=self.instance_dir,
         )
         self.app.config.update(
             TESTING=True,
@@ -63,12 +92,15 @@ class RPVSemIRRFTestCase(unittest.TestCase):
             APP_EXTERNAL_URL="https://siscon.local",
             NOTIFICATION_DELIVERY_MODE="file",
             NOTIFICATION_OUTBOX_DIR=self.notification_outbox,
+            REQUEST_THROTTLE_BACKEND="sqlite",
+            OBSERVABILITY_ENABLE_FILE_LOGGING=False,
             PASSWORD_RESET_CODE_TTL_MINUTES=10,
             PASSWORD_RESET_TOKEN_TTL_MINUTES=10,
             PASSWORD_RESET_CODE_MAX_ATTEMPTS=5,
         )
         self.app.jinja_env.filters["moeda_br"] = moeda_br
         init_security(self.app)
+        init_observability(self.app)
 
         @self.app.context_processor
         def inject_app_release_label():
@@ -83,11 +115,13 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.app.register_blueprint(cadastros_bp)
         self.app.register_blueprint(dativos_bp)
         self.app.register_blueprint(historico_bp)
+        self.app.register_blueprint(observability_bp)
         self.app.register_blueprint(reinf_bp)
         self.app.register_blueprint(usuarios_bp)
 
         self.app_context = self.app.app_context()
         self.app_context.push()
+        request_throttle.clear_all()
         db.create_all()
 
         self._seed_base()
@@ -102,6 +136,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         db.drop_all()
         self.app_context.pop()
         shutil.rmtree(self.notification_outbox, ignore_errors=True)
+        shutil.rmtree(self.instance_dir, ignore_errors=True)
 
     def _autenticar(self, user_id: int):
         with self.client.session_transaction() as session:
@@ -145,6 +180,28 @@ class RPVSemIRRFTestCase(unittest.TestCase):
             session["password_reset_pending_expires_at"] = expires_at.isoformat()
             session["password_reset_pending_destino"] = destino
             session["password_reset_pending_channel"] = channel
+
+    def _identificar_recuperacao(self, cliente, login: str, *, follow_redirects: bool = False):
+        return cliente.post(
+            "/esqueci-senha",
+            data={"form_step": "identificar", "login": login},
+            follow_redirects=follow_redirects,
+        )
+
+    def _enviar_codigo_recuperacao(
+        self,
+        cliente,
+        *,
+        login: str,
+        channel: str = "email",
+        follow_redirects: bool = True,
+    ):
+        self._identificar_recuperacao(cliente, login)
+        return cliente.post(
+            "/esqueci-senha",
+            data={"form_step": "enviar_codigo", "canal_recuperacao": channel},
+            follow_redirects=follow_redirects,
+        )
 
     def _data_base_mes_atual(self):
         return date.today().replace(day=1)
@@ -610,15 +667,24 @@ class RPVSemIRRFTestCase(unittest.TestCase):
     def test_esqueci_senha_envia_codigo_por_email_quando_usuario_tem_email(self):
         cliente_anonimo = self.app.test_client()
 
+        resposta_identificacao = self._identificar_recuperacao(cliente_anonimo, "teste")
+        html_identificacao = resposta_identificacao.get_data(as_text=True)
+
+        self.assertEqual(resposta_identificacao.status_code, 200)
+        self.assertIn("Escolha onde receber", html_identificacao)
+        self.assertIn("te***@controle-rpv.local", html_identificacao)
+        self.assertNotIn("Login, email ou telefone", html_identificacao)
+        self.assertEqual(PasswordResetToken.query.count(), 0)
+
         resposta = cliente_anonimo.post(
             "/esqueci-senha",
-            data={"identificador": "teste"},
+            data={"form_step": "enviar_codigo", "canal_recuperacao": "email"},
             follow_redirects=True,
         )
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Se houver um acesso ativo com contato valido", html)
+        self.assertIn("Codigo registrado na caixa local", html)
         self.assertIn("Informe o codigo", html)
         self.assertEqual(PasswordResetToken.query.count(), 1)
 
@@ -627,6 +693,80 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(notificacao["destination"], "teste@controle-rpv.local")
         self.assertIn("codigo de recuperacao", notificacao["subject"].lower())
         self.assertRegex(notificacao["body"], r"\b\d{6}\b")
+
+    def test_esqueci_senha_permite_escolher_sms_quando_usuario_tem_email_e_telefone(self):
+        usuario = User(
+            nome="Usuario Dois Canais",
+            login="usuario.doiscanais",
+            email="usuario.doiscanais@controle-rpv.local",
+            telefone="79997776666",
+            cargo="Analista",
+            setor="RPV",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario.set_password("SenhaSms123")
+        db.session.add(usuario)
+        db.session.commit()
+
+        cliente_anonimo = self.app.test_client()
+        resposta_identificacao = self._identificar_recuperacao(cliente_anonimo, "usuario.doiscanais")
+        html_identificacao = resposta_identificacao.get_data(as_text=True)
+
+        self.assertEqual(resposta_identificacao.status_code, 200)
+        self.assertIn("us***@controle-rpv.local", html_identificacao)
+        self.assertIn("(**) *****-6666", html_identificacao)
+
+        resposta = cliente_anonimo.post(
+            "/esqueci-senha",
+            data={"form_step": "enviar_codigo", "canal_recuperacao": "sms"},
+            follow_redirects=True,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Informe o codigo", html)
+        self.assertEqual(PasswordResetToken.query.filter_by(user_id=usuario.id).count(), 1)
+
+        notificacao = self._ultima_notificacao()
+        self.assertEqual(notificacao["channel"], "sms")
+        self.assertEqual(notificacao["destination"], "79997776666")
+        self.assertRegex(notificacao["body"], r"\b\d{6}\b")
+
+    def test_esqueci_senha_nao_cria_codigo_quando_canal_escolhido_nao_existe_no_cadastro(self):
+        usuario = User(
+            nome="Usuario Sem SMS",
+            login="usuario.semsms",
+            email="usuario.semsms@controle-rpv.local",
+            telefone=None,
+            cargo="Analista",
+            setor="RPV",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario.set_password("SenhaSms123")
+        db.session.add(usuario)
+        db.session.commit()
+
+        cliente_anonimo = self.app.test_client()
+        resposta_identificacao = self._identificar_recuperacao(cliente_anonimo, "usuario.semsms")
+        html_identificacao = resposta_identificacao.get_data(as_text=True)
+
+        self.assertEqual(resposta_identificacao.status_code, 200)
+        self.assertIn("Email cadastrado", html_identificacao)
+        self.assertNotIn("SMS cadastrado", html_identificacao)
+
+        resposta = cliente_anonimo.post(
+            "/esqueci-senha",
+            data={"form_step": "enviar_codigo", "canal_recuperacao": "sms"},
+            follow_redirects=True,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Escolha um canal cadastrado", html)
+        self.assertEqual(PasswordResetToken.query.filter_by(user_id=usuario.id).count(), 0)
+        self.assertEqual(len(self._arquivos_notificacao()), 0)
 
     def test_esqueci_senha_envia_codigo_por_sms_quando_usuario_tem_so_telefone(self):
         usuario = User(
@@ -644,15 +784,23 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         db.session.commit()
 
         cliente_anonimo = self.app.test_client()
+        resposta_identificacao = self._identificar_recuperacao(cliente_anonimo, "usuario.sms")
+        html_identificacao = resposta_identificacao.get_data(as_text=True)
+
+        self.assertEqual(resposta_identificacao.status_code, 200)
+        self.assertIn("SMS cadastrado", html_identificacao)
+        self.assertIn("(**) *****-7777", html_identificacao)
+        self.assertNotIn("Email cadastrado", html_identificacao)
+
         resposta = cliente_anonimo.post(
             "/esqueci-senha",
-            data={"identificador": "(79) 99888-7777"},
+            data={"form_step": "enviar_codigo", "canal_recuperacao": "sms"},
             follow_redirects=True,
         )
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Se houver um acesso ativo com contato valido", html)
+        self.assertIn("Informe o codigo", html)
         self.assertEqual(PasswordResetToken.query.filter_by(user_id=usuario.id).count(), 1)
 
         notificacao = self._ultima_notificacao()
@@ -660,29 +808,129 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(notificacao["destination"], "79998887777")
         self.assertRegex(notificacao["body"], r"\b\d{6}\b")
 
+    def test_admin_visualiza_codigo_de_recuperacao_no_outbox_local(self):
+        cliente_anonimo = self.app.test_client()
+        self._enviar_codigo_recuperacao(cliente_anonimo, login="teste", channel="email", follow_redirects=False)
+        notificacao = self._ultima_notificacao()
+        codigo = self._extrair_codigo_notificacao(notificacao)
+
+        self._autenticar(self.user_id)
+        resposta = self.client.get("/usuarios/notificacoes-recuperacao")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Codigos de recuperacao", html)
+        self.assertIn("teste@controle-rpv.local", html)
+        self.assertIn(codigo, html)
+
+    def test_brevo_api_envia_email_transacional(self):
+        self.app.config.update(
+            NOTIFICATION_DELIVERY_MODE="brevo_api",
+            BREVO_API_KEY="xkeysib-teste",
+            BREVO_API_URL="https://api.brevo.com/v3/smtp/email",
+            BREVO_SENDER_EMAIL="nao-responda@siscon.local",
+            BREVO_SENDER_NAME="SISCON",
+        )
+
+        with patch("app.services.notification_service.urlopen") as urlopen_mock:
+            urlopen_mock.return_value = FakeHTTPResponse('{"messageId":"abc-123"}', status=201)
+            resultado = send_notification(
+                notification_type="password_reset_code",
+                channel="email",
+                destination="teste@controle-rpv.local",
+                subject="SISCON | Codigo de recuperacao",
+                body="Codigo 123456",
+            )
+
+        requisicao = urlopen_mock.call_args.args[0]
+        payload = json.loads(requisicao.data.decode("utf-8"))
+
+        self.assertEqual(resultado["mode"], "brevo_api")
+        self.assertEqual(resultado["message_id"], "abc-123")
+        self.assertEqual(requisicao.full_url, "https://api.brevo.com/v3/smtp/email")
+        self.assertEqual(payload["sender"]["email"], "nao-responda@siscon.local")
+        self.assertEqual(payload["to"][0]["email"], "teste@controle-rpv.local")
+        self.assertEqual(payload["textContent"], "Codigo 123456")
+
+    def test_sms_webhook_open_source_gammu_usa_payload_e_auth_basic(self):
+        self.app.config.update(
+            NOTIFICATION_DELIVERY_MODE="smtp",
+            SMS_WEBHOOK_URL="http://127.0.0.1:5000/sms",
+            SMS_WEBHOOK_AUTH_TYPE="basic",
+            SMS_WEBHOOK_USERNAME="admin",
+            SMS_WEBHOOK_PASSWORD="password",
+            SMS_WEBHOOK_PAYLOAD_STYLE="gammu",
+        )
+
+        with patch("app.services.notification_service.urlopen") as urlopen_mock:
+            urlopen_mock.return_value = FakeHTTPResponse("{}", status=200)
+            resultado = send_notification(
+                notification_type="password_reset_code",
+                channel="sms",
+                destination="79998887777",
+                subject="SISCON | Codigo de recuperacao",
+                body="SISCON: seu codigo e 123456.",
+            )
+
+        requisicao = urlopen_mock.call_args.args[0]
+        payload = json.loads(requisicao.data.decode("utf-8"))
+
+        self.assertEqual(resultado["mode"], "sms_webhook")
+        self.assertEqual(requisicao.full_url, "http://127.0.0.1:5000/sms")
+        self.assertEqual(payload, {"number": "79998887777", "text": "SISCON: seu codigo e 123456."})
+        self.assertTrue(requisicao.get_header("Authorization").startswith("Basic "))
+
+    def test_recuperacao_modo_brevo_exibe_apenas_email_configurado(self):
+        self.app.config.update(
+            NOTIFICATION_DELIVERY_MODE="brevo_api",
+            BREVO_API_KEY="xkeysib-teste",
+            BREVO_SENDER_EMAIL="nao-responda@siscon.local",
+        )
+        usuario = User(
+            nome="Usuario Brevo",
+            login="usuario.brevo",
+            email="usuario.brevo@controle-rpv.local",
+            telefone="79991112222",
+            cargo="Analista",
+            setor="RPV",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario.set_password("SenhaBrevo123")
+        db.session.add(usuario)
+        db.session.commit()
+
+        cliente_anonimo = self.app.test_client()
+        resposta = self._identificar_recuperacao(cliente_anonimo, "usuario.brevo")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Email cadastrado", html)
+        self.assertIn("us***@controle-rpv.local", html)
+        self.assertNotIn("SMS cadastrado", html)
+        self.assertNotIn("(**) *****-2222", html)
+
     def test_esqueci_senha_mantem_resposta_generica_para_usuario_inexistente(self):
         cliente_anonimo = self.app.test_client()
 
         resposta = cliente_anonimo.post(
             "/esqueci-senha",
-            data={"identificador": "nao.existe"},
+            data={"form_step": "identificar", "login": "nao.existe"},
             follow_redirects=True,
         )
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Se houver um acesso ativo com contato valido", html)
+        self.assertIn("Se o login informado estiver ativo", html)
+        self.assertIn("Ambiente local", html)
         self.assertEqual(PasswordResetToken.query.count(), 0)
         self.assertEqual(len(self._arquivos_notificacao()), 0)
-        self.assertIn("Informe o codigo", html)
+        self.assertIn("Continuar", html)
+        self.assertNotIn("Escolha onde receber", html)
 
     def test_redefinicao_de_senha_consumo_codigo_e_permitem_novo_login(self):
         cliente_anonimo = self.app.test_client()
-        cliente_anonimo.post(
-            "/esqueci-senha",
-            data={"identificador": "teste"},
-            follow_redirects=False,
-        )
+        self._enviar_codigo_recuperacao(cliente_anonimo, login="teste", channel="email", follow_redirects=False)
 
         notificacao = self._ultima_notificacao()
         codigo = self._extrair_codigo_notificacao(notificacao)
@@ -747,7 +995,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Solicite um novo codigo", html)
-        self.assertIn("Enviar codigo de recuperacao", html)
+        self.assertIn("Continuar", html)
 
     def test_codigo_invalido_bloqueia_solicitacao_apos_limite_de_tentativas(self):
         usuario = User.query.filter_by(login="teste").first()
@@ -801,7 +1049,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("A validacao do codigo expirou", html)
-        self.assertIn("Enviar codigo de recuperacao", html)
+        self.assertIn("Continuar", html)
 
     def test_novo_rpv_fica_contextualizado_em_rpvs_normais(self):
         resposta = self.client.get("/rpvs/novo")
@@ -1159,7 +1407,8 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Pendências documentais", html)
-        self.assertIn("Cadastros guardados fora do fluxo oficial", html)
+        self.assertIn("1 caso(s)", html)
+        self.assertIn("pendência(s)", html)
         self.assertIn("Pendencia Busca Cruzada", html)
         self.assertIn("Abrir pendência", html)
 
@@ -1193,7 +1442,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("PROC-PENDENTE-FILTRO", html)
         self.assertIn("Todos", html)
 
-    def test_usuario_sem_vinculo_nao_acessa_pendencia_documental(self):
+    def test_usuario_nao_admin_pode_ver_todos_e_tratar_pendencia_documental_de_outro_usuario(self):
         self.client.post(
             "/rpvs/novo",
             data={
@@ -1235,22 +1484,27 @@ class RPVSemIRRFTestCase(unittest.TestCase):
             session["_fresh"] = True
         g.pop("_login_user", None)
 
-        resposta_lista = cliente_sem_vinculo.get("/rpvs/pendencias-documentais")
+        resposta_lista = cliente_sem_vinculo.get(
+            "/rpvs/pendencias-documentais",
+            query_string={"responsavel": "todos", "status": "todas"},
+        )
         html_lista = resposta_lista.get_data(as_text=True)
         self.assertEqual(resposta_lista.status_code, 200)
-        self.assertNotIn("Pendencia Acesso Restrito", html_lista)
+        self.assertIn("Pendencia Acesso Restrito", html_lista)
+        self.assertIn("Todos", html_lista)
 
         resposta_detalhe = cliente_sem_vinculo.get(
             f"/rpvs/pendencias-documentais/{pendencia.id}",
             follow_redirects=False,
         )
-        self.assertEqual(resposta_detalhe.status_code, 302)
-        self.assertIn("/rpvs/pendencias-documentais", resposta_detalhe.headers.get("Location", ""))
+        html_detalhe = resposta_detalhe.get_data(as_text=True)
+        self.assertEqual(resposta_detalhe.status_code, 200)
+        self.assertIn("Pendencia Acesso Restrito", html_detalhe)
 
         resposta_post = cliente_sem_vinculo.post(
             f"/rpvs/pendencias-documentais/{pendencia.id}",
             data={
-                "acao": "descartar",
+                "acao": "confirmar_documento",
                 "exercicio": "2026-04",
                 "processo_edoc": "CI-PENDENTE-ACESSO",
                 "numero_processo": "PROC-PENDENTE-ACESSO",
@@ -1270,6 +1524,170 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         pendencia = db.session.get(RPVPendenciaDocumento, pendencia.id)
         self.assertEqual(resposta_post.status_code, 302)
         self.assertEqual(pendencia.status, "aberta")
+        self.assertTrue(pendencia.documento_confirmado_manual)
+        self.assertEqual(pendencia.documento_confirmado_por_id, usuario_sem_vinculo.id)
+
+    def test_pendencias_documentais_abrem_em_todos_por_padrao(self):
+        self.client.post(
+            "/rpvs/novo",
+            data={
+                "exercicio": "2026-04",
+                "processo_edoc": "CI-PENDENTE-PADRAO",
+                "numero_processo": "PROC-PENDENTE-PADRAO",
+                "data_ci": "2026-04-07",
+                "tipo_rpv_id": str(self.tipo_honorarios_id),
+                "nome_beneficiario": "Pendencia Padrao Compartilhada",
+                "tipo_documento": "CPF",
+                "documento_original": "",
+                "valor_bruto": "1800,00",
+                "valor_irrf": "",
+                "sem_irrf": "1",
+            },
+            follow_redirects=False,
+        )
+
+        usuario_sem_vinculo = User(
+            nome="Usuario Padrao Pendencia",
+            login="usuario.padrao.pendencia",
+            email="usuario.padrao.pendencia@controle-rpv.local",
+            telefone="61999990002",
+            cargo="Analista",
+            setor="RPV",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_sem_vinculo.set_password("Senha1234")
+        db.session.add(usuario_sem_vinculo)
+        db.session.commit()
+
+        cliente_sem_vinculo = self.app.test_client()
+        with cliente_sem_vinculo.session_transaction() as session:
+            session["_user_id"] = str(usuario_sem_vinculo.id)
+            session["_fresh"] = True
+        g.pop("_login_user", None)
+
+        resposta = cliente_sem_vinculo.get("/rpvs/pendencias-documentais")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn('option value="todos" selected', html)
+        self.assertIn("Pendencia Padrao Compartilhada", html)
+
+    def test_busca_pendencias_documentais_sem_fila_explicita_varre_toda_a_fila(self):
+        self.client.post(
+            "/rpvs/novo",
+            data={
+                "exercicio": "2026-04",
+                "processo_edoc": "7413/2025",
+                "numero_processo": "PROC-PENDENTE-BUSCA-COMPARTILHADA",
+                "data_ci": "2026-04-07",
+                "tipo_rpv_id": str(self.tipo_honorarios_id),
+                "nome_beneficiario": "Pendencia Busca Compartilhada",
+                "tipo_documento": "CPF",
+                "documento_original": "",
+                "valor_bruto": "1800,00",
+                "valor_irrf": "",
+                "sem_irrf": "1",
+            },
+            follow_redirects=False,
+        )
+
+        usuario_sem_vinculo = User(
+            nome="Usuario Busca Pendencia",
+            login="usuario.busca.pendencia",
+            email="usuario.busca.pendencia@controle-rpv.local",
+            telefone="61999990003",
+            cargo="Analista",
+            setor="RPV",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_sem_vinculo.set_password("Senha1234")
+        db.session.add(usuario_sem_vinculo)
+        db.session.commit()
+
+        cliente_sem_vinculo = self.app.test_client()
+        with cliente_sem_vinculo.session_transaction() as session:
+            session["_user_id"] = str(usuario_sem_vinculo.id)
+            session["_fresh"] = True
+        g.pop("_login_user", None)
+
+        resposta = cliente_sem_vinculo.get(
+            "/rpvs/pendencias-documentais",
+            query_string={"status": "todas", "q": "7413/2025"},
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn('option value="todos" selected', html)
+        self.assertIn("Pendencia Busca Compartilhada", html)
+        self.assertIn("7413/2025", html)
+
+    def test_usuario_nao_admin_pode_filtrar_pendencias_documentais_por_responsavel_especifico(self):
+        usuario_secundario = User(
+            nome="Usuario Filtro Pendencia",
+            login="usuario.filtro.pendencia",
+            email="usuario.filtro.pendencia@controle-rpv.local",
+            telefone="61999990001",
+            cargo="Analista",
+            setor="RPV",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_secundario.set_password("Senha1234")
+        db.session.add(usuario_secundario)
+        db.session.commit()
+
+        self.client.post(
+            "/rpvs/novo",
+            data={
+                "exercicio": "2026-04",
+                "processo_edoc": "CI-PENDENTE-FILTRO-ADM",
+                "numero_processo": "PROC-PENDENTE-FILTRO-ADM",
+                "data_ci": "2026-04-08",
+                "tipo_rpv_id": str(self.tipo_honorarios_id),
+                "nome_beneficiario": "Pendencia Filtro Admin",
+                "tipo_documento": "CPF",
+                "documento_original": "",
+                "elaborador_id": str(self.user_id),
+                "valor_bruto": "1900,00",
+                "valor_irrf": "",
+                "sem_irrf": "1",
+            },
+            follow_redirects=False,
+        )
+
+        self._autenticar(usuario_secundario.id)
+
+        self.client.post(
+            "/rpvs/novo",
+            data={
+                "exercicio": "2026-04",
+                "processo_edoc": "CI-PENDENTE-FILTRO-SEC",
+                "numero_processo": "PROC-PENDENTE-FILTRO-SEC",
+                "data_ci": "2026-04-08",
+                "tipo_rpv_id": str(self.tipo_honorarios_id),
+                "nome_beneficiario": "Pendencia Filtro Secundario",
+                "tipo_documento": "CPF",
+                "documento_original": "",
+                "elaborador_id": str(usuario_secundario.id),
+                "valor_bruto": "2100,00",
+                "valor_irrf": "",
+                "sem_irrf": "1",
+            },
+            follow_redirects=False,
+        )
+
+        resposta = self.client.get(
+            "/rpvs/pendencias-documentais",
+            query_string={"responsavel": str(self.user_id), "status": "todas"},
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn('option value="1" selected', html)
+        self.assertIn("Pendencia Filtro Admin", html)
+        self.assertNotIn("Pendencia Filtro Secundario", html)
 
     def test_bi_conferencia_exibe_documentos_pendentes_sem_somar_com_pagamentos(self):
         self.client.post(
@@ -1485,7 +1903,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        usuario_atualizado = User.query.get(usuario.id)
+        usuario_atualizado = db.session.get(User, usuario.id)
         self.assertEqual(usuario_atualizado.nome, "Operador Atualizado")
         self.assertEqual(usuario_atualizado.login, "operador.atualizado")
         self.assertEqual(usuario_atualizado.email, "operador.atualizado@controle-rpv.local")
@@ -1525,7 +1943,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        usuario_atualizado = User.query.get(usuario.id)
+        usuario_atualizado = db.session.get(User, usuario.id)
         self.assertEqual(usuario_atualizado.telefone, "79998887777")
 
         resposta_form = self.client.get(f"/usuarios/{usuario.id}/editar")
@@ -1570,7 +1988,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Você não pode desativar o seu próprio usuário.", html)
-        usuario = User.query.get(self.user_id)
+        usuario = db.session.get(User, self.user_id)
         self.assertTrue(usuario.ativo)
 
     def test_login_redireciona_para_troca_obrigatoria_de_senha(self):
@@ -1598,7 +2016,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         self.assertIn("/usuarios/minha-senha", resposta.headers.get("Location", ""))
-        usuario_atualizado = User.query.get(usuario.id)
+        usuario_atualizado = db.session.get(User, usuario.id)
         self.assertIsNotNone(usuario_atualizado.ultimo_login_em)
         self.assertTrue(usuario_atualizado.ultimo_login_ip)
 
@@ -1647,7 +2065,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         self.assertIn("/usuarios/meu-cadastro", resposta.headers.get("Location", ""))
-        usuario_atualizado = User.query.get(usuario.id)
+        usuario_atualizado = db.session.get(User, usuario.id)
         self.assertTrue(usuario_atualizado.check_password("SenhaNova123"))
         self.assertFalse(usuario_atualizado.forcar_troca_senha)
         self.assertIsNotNone(usuario_atualizado.senha_alterada_em)
@@ -1703,7 +2121,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         self.assertIn("/", resposta.headers.get("Location", ""))
-        usuario_atualizado = User.query.get(usuario.id)
+        usuario_atualizado = db.session.get(User, usuario.id)
         self.assertEqual(usuario_atualizado.email, "usuario.completar@controle-rpv.local")
         self.assertEqual(usuario_atualizado.telefone, "61988887777")
         self.assertEqual(usuario_atualizado.cargo, "Assistente")
@@ -1738,7 +2156,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Informe um telefone com DDD", html)
-        usuario_atualizado = User.query.get(usuario.id)
+        usuario_atualizado = db.session.get(User, usuario.id)
         self.assertIsNone(usuario_atualizado.telefone)
 
     def test_cadastro_salva_sem_irrf_explicito_no_rpv_normal(self):
@@ -1961,6 +2379,50 @@ class RPVSemIRRFTestCase(unittest.TestCase):
             html,
         )
 
+    def test_busca_cruzada_em_rpvs_retorna_para_lista_original_ao_abrir_dativo(self):
+        _, lote, itens = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-CRUZADO-RETORNO",
+            itens=[
+                {
+                    "nome_beneficiario": "Dativo Cruzado Retorno",
+                    "cpf_original": "52998224725",
+                    "numero_processo": "PROC-CRUZADO-RETORNO",
+                    "valor_bruto": Decimal("1500.00"),
+                }
+            ],
+        )
+        item = itens[0]
+        self._criar_rpv(
+            nome_beneficiario="RPV Cruzado Retorno",
+            documento_original="98765432100",
+            numero_processo=item.numero_processo,
+        )
+
+        resposta_lista = self.client.get(
+            "/rpvs/?q=PROC-CRUZADO-RETORNO&responsavel=todos&mostrar_encerrados=1"
+        )
+        html_lista = resposta_lista.get_data(as_text=True)
+
+        self.assertEqual(resposta_lista.status_code, 200)
+        self.assertIn(
+            f"/dativos/lotes-sem-irrf/{lote.id}?retorno=%2Frpvs%2F%3Fq%3DPROC-CRUZADO-RETORNO%26responsavel%3Dtodos%26mostrar_encerrados%3D1",
+            html_lista,
+        )
+
+        resposta_detalhe = self.client.get(
+            f"/dativos/lotes-sem-irrf/{lote.id}",
+            query_string={
+                "retorno": "/rpvs/?q=PROC-CRUZADO-RETORNO&responsavel=todos&mostrar_encerrados=1"
+            },
+        )
+        html_detalhe = resposta_detalhe.get_data(as_text=True)
+
+        self.assertEqual(resposta_detalhe.status_code, 200)
+        self.assertIn(
+            'href="/rpvs/?q=PROC-CRUZADO-RETORNO&amp;responsavel=todos&amp;mostrar_encerrados=1">Retornar',
+            html_detalhe,
+        )
+
     def test_detalhe_dativo_ignora_retorno_externo(self):
         _, lote, _ = self._criar_dativo_sem_irrf(
             processo_edoc="CI-RETORNO-EXTERNO",
@@ -1983,6 +2445,82 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resposta.status_code, 200)
         self.assertIn('href="/dativos/cis">Retornar', html)
         self.assertNotIn("exemplo.invalid", html)
+
+    def test_reinf_preserva_retorno_ao_abrir_rpv(self):
+        registro = self._criar_rpv(
+            nome_beneficiario="Retorno REINF",
+            documento_original="39053344705",
+            numero_processo="PROC-RETORNO-REINF",
+            valor_irrf=Decimal("320.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 15),
+        )
+
+        resposta = self.client.get(
+            "/reinf/?competencia=2026-03&reinf_status=todos&q=Retorno&responsavel=todos&ordenar=imposto&direcao=desc"
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn(f"/rpvs/{registro.id}/editar?retorno=", html)
+        href_inicio = html.index(f'/rpvs/{registro.id}/editar?retorno=')
+        href_fim = html.index('"', href_inicio)
+        abrir_href = html[href_inicio:href_fim]
+        retorno = parse_qs(urlsplit(abrir_href).query).get("retorno", [""])[0]
+
+        self.assertTrue(retorno.startswith("/reinf/?competencia=2026-03"))
+        self.assertIn("q=Retorno", retorno)
+        self.assertIn("responsavel=todos", retorno)
+        self.assertIn("ordenar=imposto", retorno)
+        self.assertIn("direcao=desc", retorno)
+
+    def test_reinf_atualizacao_status_preserva_retorno_explicito(self):
+        registro = self._criar_rpv(
+            nome_beneficiario="Status REINF Retorno",
+            valor_irrf=Decimal("410.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 18),
+        )
+        retorno = "/reinf/?competencia=2026-03&reinf_status=todos&q=Retorno&responsavel=todos"
+
+        resposta = self.client.post(
+            "/reinf/atualizar-status",
+            data={
+                "origem": "rpv",
+                "registro_id": str(registro.id),
+                "reinf_status": "Concluído",
+                "retorno": retorno,
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        self.assertEqual(resposta.headers["Location"], retorno)
+
+    def test_reinf_atualizacao_status_ignora_retorno_externo(self):
+        registro = self._criar_rpv(
+            nome_beneficiario="Status REINF Externo",
+            valor_irrf=Decimal("410.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 18),
+        )
+
+        resposta = self.client.post(
+            "/reinf/atualizar-status",
+            data={
+                "origem": "rpv",
+                "registro_id": str(registro.id),
+                "reinf_status": "Concluído",
+                "retorno": "https://exemplo.invalid/reinf",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        self.assertEqual(resposta.headers["Location"], "/reinf/")
 
     def test_edicao_sem_irrf_oculta_fluxo_fiscal_do_rpv(self):
         registro = self._criar_rpv(
@@ -2048,6 +2586,194 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn('name="csrf_token"', resposta.get_data(as_text=True))
+
+    def test_login_aplica_throttle_minimo_apos_falhas_repetidas(self):
+        self.app.config.update(
+            LOGIN_THROTTLE_MAX_FAILURES=2,
+            LOGIN_THROTTLE_WINDOW_SECONDS=60,
+        )
+        client = self.app.test_client()
+        ip_origem = {"REMOTE_ADDR": "172.20.10.25"}
+
+        for _ in range(2):
+            client.post(
+                "/login",
+                data={"login": "teste", "senha": "senha-errada"},
+                follow_redirects=True,
+                environ_overrides=ip_origem,
+            )
+
+        resposta = client.post(
+            "/login",
+            data={"login": "teste", "senha": "senha123"},
+            follow_redirects=True,
+            environ_overrides=ip_origem,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Muitas tentativas de login", html)
+        self.assertIn("Acesse sua conta", html)
+
+    def test_login_throttle_persiste_em_armazenamento_sqlite_apos_reset_local(self):
+        self.app.config.update(
+            LOGIN_THROTTLE_MAX_FAILURES=2,
+            LOGIN_THROTTLE_WINDOW_SECONDS=60,
+            REQUEST_THROTTLE_BACKEND="sqlite",
+        )
+        client = self.app.test_client()
+        ip_origem = {"REMOTE_ADDR": "172.20.10.26"}
+
+        for _ in range(2):
+            client.post(
+                "/login",
+                data={"login": "teste", "senha": "senha-errada"},
+                follow_redirects=True,
+                environ_overrides=ip_origem,
+            )
+
+        with patch("app.utils.request_throttle.has_app_context", return_value=False):
+            request_throttle.clear_all()
+
+        resposta = client.post(
+            "/login",
+            data={"login": "teste", "senha": "senha123"},
+            follow_redirects=True,
+            environ_overrides=ip_origem,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Muitas tentativas de login", html)
+        self.assertTrue((Path(self.instance_dir) / "request_throttle.sqlite3").exists())
+
+    def test_recuperacao_aplica_throttle_minimo_para_reenvio_de_codigo(self):
+        self.app.config.update(
+            PASSWORD_RESET_SEND_THROTTLE_MAX_ATTEMPTS=1,
+            PASSWORD_RESET_SEND_THROTTLE_WINDOW_SECONDS=600,
+        )
+        ip_origem = {"REMOTE_ADDR": "172.20.10.30"}
+
+        cliente_anonimo = self.app.test_client()
+        cliente_anonimo.post(
+            "/esqueci-senha",
+            data={"form_step": "identificar", "login": "teste"},
+            environ_overrides=ip_origem,
+        )
+        resposta_primeiro_envio = cliente_anonimo.post(
+            "/esqueci-senha",
+            data={"form_step": "enviar_codigo", "canal_recuperacao": "email"},
+            follow_redirects=True,
+            environ_overrides=ip_origem,
+        )
+
+        self.assertEqual(resposta_primeiro_envio.status_code, 200)
+        self.assertEqual(PasswordResetToken.query.count(), 1)
+
+        cliente_bloqueado = self.app.test_client()
+        cliente_bloqueado.post(
+            "/esqueci-senha",
+            data={"form_step": "identificar", "login": "teste"},
+            environ_overrides=ip_origem,
+        )
+        resposta_bloqueio = cliente_bloqueado.post(
+            "/esqueci-senha",
+            data={"form_step": "enviar_codigo", "canal_recuperacao": "email"},
+            follow_redirects=True,
+            environ_overrides=ip_origem,
+        )
+        html = resposta_bloqueio.get_data(as_text=True)
+
+        self.assertEqual(resposta_bloqueio.status_code, 200)
+        self.assertIn("acabou de solicitar codigo de recuperacao", html)
+        self.assertEqual(PasswordResetToken.query.count(), 1)
+        self.assertEqual(len(self._arquivos_notificacao()), 1)
+
+    def test_request_throttle_sqlite_limpa_hits_antigos_globalmente(self):
+        self.app.config.update(
+            REQUEST_THROTTLE_BACKEND="sqlite",
+            REQUEST_THROTTLE_GC_INTERVAL_SECONDS=1,
+            REQUEST_THROTTLE_GC_MAX_AGE_SECONDS=3600,
+        )
+        throttle_path = Path(self.instance_dir) / "request_throttle.sqlite3"
+        request_throttle.clear_all()
+        request_throttle.hit("bucket-ativo", window_seconds=60)
+
+        with sqlite3.connect(str(throttle_path)) as connection:
+            connection.execute(
+                "INSERT INTO throttle_hits (bucket_key, hit_at) VALUES (?, ?)",
+                ("bucket-antigo", time() - 7200),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO throttle_meta (meta_key, value) VALUES (?, ?)",
+                ("last_global_cleanup_at", str(time() - 10)),
+            )
+
+        decisao = request_throttle.check("bucket-ativo", limit=5, window_seconds=60)
+
+        self.assertTrue(decisao.allowed)
+        with sqlite3.connect(str(throttle_path)) as connection:
+            antigo = connection.execute(
+                "SELECT 1 FROM throttle_hits WHERE bucket_key = ?",
+                ("bucket-antigo",),
+            ).fetchone()
+            ativo = connection.execute(
+                "SELECT 1 FROM throttle_hits WHERE bucket_key = ?",
+                ("bucket-ativo",),
+            ).fetchone()
+            meta = connection.execute(
+                "SELECT value FROM throttle_meta WHERE meta_key = ?",
+                ("last_global_cleanup_at",),
+            ).fetchone()
+
+        self.assertIsNone(antigo)
+        self.assertIsNotNone(ativo)
+        self.assertIsNotNone(meta)
+
+    def test_healthcheck_basico_responde_ok_com_request_id(self):
+        resposta = self.client.get("/health")
+        payload = resposta.get_json()
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(payload["status"], "ok")
+        self.assertIn("X-Request-ID", resposta.headers)
+        checks = {check["component"]: check for check in payload["checks"]}
+        throttle_check = checks["request_throttle"]
+        self.assertEqual(checks["database"]["status"], "ok")
+        self.assertEqual(throttle_check["status"], "ok")
+        self.assertEqual(throttle_check["backend"], "sqlite")
+        self.assertTrue(throttle_check["storage_path"].endswith("request_throttle.sqlite3"))
+
+    def test_healthcheck_operacional_admin_retorna_resumo(self):
+        resposta = self.client.get("/health/operational")
+        payload = resposta.get_json()
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(payload["status"], "ok")
+        self.assertIn("summary", payload)
+        self.assertEqual(payload["summary"]["rpvs_ativos"], 0)
+        self.assertEqual(payload["summary"]["issues_por_severidade"], {})
+
+    def test_healthcheck_operacional_exige_admin(self):
+        usuario = User(
+            nome="Operador Simples",
+            login="operador",
+            email="operador@controle-rpv.local",
+            telefone="79999999999",
+            cargo="Operador",
+            setor="Financeiro",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario.set_password("senha123")
+        db.session.add(usuario)
+        db.session.commit()
+        self._autenticar(usuario.id)
+
+        resposta = self.client.get("/health/operational")
+
+        self.assertEqual(resposta.status_code, 403)
+        self._autenticar(self.user_id)
 
     def test_cadastro_ajusta_exercicio_para_mes_do_pagamento(self):
         resposta = self.client.post(
@@ -2332,7 +3058,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         db.session.expire_all()
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.criado_por_id, self.user_id)
         self.assertEqual(registro_atualizado.elaborador_id, usuario_secundario.id)
 
@@ -2603,6 +3329,49 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("Localizado por: C.I./eDOC", html)
         self.assertIn("Abrir C.I.", html)
 
+    def test_lista_rpvs_mensagem_cruzada_reflete_rpv_normal_e_dativo_mesma_ci(self):
+        usuario_secundario = User(
+            nome="Usuário Dono RPV Cruzada",
+            login="usuario.dono.rpv.cruzada",
+            email="usuario.dono.rpv.cruzada@controle-rpv.local",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_secundario.set_password("Senha1234")
+        db.session.add(usuario_secundario)
+        db.session.commit()
+
+        self._criar_rpv(
+            nome_beneficiario="BENEFICIARIO NORMAL CI COMPARTILHADA",
+            processo_edoc="CI-COMPARTILHADA-TRANSVERSAL",
+            numero_processo="PROC-NORMAL-CI-COMPARTILHADA",
+            elaborador_id=usuario_secundario.id,
+            criado_por_id=usuario_secundario.id,
+        )
+        self._criar_dativo_sem_irrf(
+            processo_edoc="CI-COMPARTILHADA-TRANSVERSAL",
+            itens=[
+                {
+                    "nome_beneficiario": "BENEFICIARIO DATIVO CI COMPARTILHADA",
+                    "numero_processo": "PROC-DATIVO-CI-COMPARTILHADA",
+                    "valor_bruto": Decimal("5855.02"),
+                },
+            ],
+        )
+
+        resposta = self.client.get("/rpvs/?q=CI-COMPARTILHADA-TRANSVERSAL")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Busca encontrada em RPVs normais e dativos", html)
+        self.assertIn("A grade atual não trouxe linhas com os filtros aplicados", html)
+        self.assertNotIn("Nenhum RPV normal bateu com a consulta atual", html)
+        self.assertIn("Há 1 ocorrência(s) em RPVs normais", html)
+        self.assertIn("também em dativos na C.I.", html)
+        self.assertIn("CI-COMPARTILHADA-TRANSVERSAL", html)
+        self.assertIn("Abrir C.I.", html)
+        self.assertIn("Abrir RPV normal", html)
+
     def test_lista_dativos_destaca_quando_ci_de_rpv_normal_e_pesquisada_em_dativos(self):
         self._criar_rpv(
             nome_beneficiario="BENEFICIARIO NORMAL BUSCA TRANSVERSAL",
@@ -2692,7 +3461,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         db.session.expire_all()
-        dativo_ci_atualizado = DativoCI.query.get(dativo_ci.id)
+        dativo_ci_atualizado = db.session.get(DativoCI, dativo_ci.id)
         self.assertEqual(dativo_ci_atualizado.criado_por_id, self.user_id)
         self.assertEqual(dativo_ci_atualizado.responsavel_id, usuario_secundario.id)
 
@@ -2994,8 +3763,8 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_1_atualizado = RegistroRPV.query.get(registro_1.id)
-        registro_2_atualizado = RegistroRPV.query.get(registro_2.id)
+        registro_1_atualizado = db.session.get(RegistroRPV, registro_1.id)
+        registro_2_atualizado = db.session.get(RegistroRPV, registro_2.id)
         self.assertEqual(registro_1_atualizado.situacao_empenho_id, situacao_empenho_pago.id)
         self.assertEqual(registro_2_atualizado.situacao_empenho_id, situacao_empenho_pago.id)
         self.assertEqual(registro_1_atualizado.situacao_imposto_id, situacao_imposto_concluida.id)
@@ -3030,7 +3799,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 200)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         historicos_depois = HistoricoAlteracao.query.filter_by(
             entidade_tipo="registro_rpv",
             entidade_id=registro.id,
@@ -3083,7 +3852,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.situacao_empenho_id, situacao_pago.id)
         self.assertEqual(registro_atualizado.data_pagamento, self._data_base_mes_atual())
         self.assertEqual(
@@ -3125,7 +3894,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.data_pagamento, self._data_base_mes_atual())
         self.assertEqual(
             registro_atualizado.processo.exercicio,
@@ -3180,7 +3949,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.situacao_empenho_id, situacao_concluida.id)
         self.assertEqual(registro_atualizado.data_pagamento, self._data_base_mes_atual())
         self.assertEqual(
@@ -3232,7 +4001,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.data_pagamento, self._data_base_mes_atual())
         self.assertEqual(
             registro_atualizado.processo.exercicio,
@@ -3282,7 +4051,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.situacao_empenho_id, situacao_cancelado.id)
         self.assertIsNone(registro_atualizado.data_pagamento)
         self.assertIsNone(registro_atualizado.data_pagamento_irrf)
@@ -3299,6 +4068,73 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         resposta_reinf = self.client.get("/reinf/?competencia=2026-03")
         self.assertEqual(resposta_reinf.status_code, 200)
         self.assertNotIn("RPV Cancelado BI", resposta_reinf.get_data(as_text=True))
+
+    def test_bi_precarrega_situacoes_para_filtro_de_cancelamento(self):
+        registro = self._criar_rpv(
+            nome_beneficiario="BI Eager RPV",
+            valor_irrf=Decimal("180.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 18),
+        )
+        _, item = self._criar_item_dativo_com_irrf(
+            processo_edoc="CI-BI-EAGER",
+            nome_beneficiario="BI Eager Dativo",
+            cpf_original="12345678901",
+            numero_processo="PROC-BI-EAGER",
+            valor_bruto=Decimal("4200.00"),
+            valor_irrf=Decimal("420.00"),
+        )
+        item.data_pagamento = date(2026, 3, 20)
+        db.session.commit()
+
+        filtros = {
+            "origem": "todos",
+            "responsavel": "todos",
+            "pagamento": "todos",
+        }
+
+        with self.app.test_request_context("/bi"):
+            registro_bi = _query_registros_bi(filtros).filter(RegistroRPV.id == registro.id).one()
+            item_bi = _query_dativos_bi(filtros).filter(DativoItem.id == item.id).one()
+
+        self.assertNotIn("situacao_empenho", sa_inspect(registro_bi).unloaded)
+        self.assertNotIn("situacao_rpv", sa_inspect(item_bi).unloaded)
+
+    def test_reinf_precarrega_situacoes_para_filtro_de_cancelamento(self):
+        registro = self._criar_rpv(
+            nome_beneficiario="REINF Eager RPV",
+            valor_irrf=Decimal("210.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 12),
+        )
+        _, item = self._criar_item_dativo_com_irrf(
+            processo_edoc="CI-REINF-EAGER",
+            nome_beneficiario="REINF Eager Dativo",
+            cpf_original="10987654321",
+            numero_processo="PROC-REINF-EAGER",
+            valor_bruto=Decimal("5300.00"),
+            valor_irrf=Decimal("530.00"),
+        )
+        item.data_pagamento = date(2026, 3, 14)
+        db.session.commit()
+
+        registro_reinf = _query_rpvs_reinf(
+            competencia="2026-03",
+            filtro_responsavel="todos",
+            filtro_busca="",
+            ano=None,
+        ).filter(RegistroRPV.id == registro.id).one()
+        item_reinf = _query_dativos_reinf(
+            competencia="2026-03",
+            filtro_responsavel="todos",
+            filtro_busca="",
+            ano=None,
+        ).filter(DativoItem.id == item.id).one()
+
+        self.assertNotIn("situacao_empenho", sa_inspect(registro_reinf).unloaded)
+        self.assertNotIn("situacao_rpv", sa_inspect(item_reinf).unloaded)
 
     def test_dativos_atualiza_status_em_lote_para_lote_e_item(self):
         situacao_rpv_pago = SituacaoEmpenho(
@@ -3368,8 +4204,8 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         db.session.expire_all()
-        lote_atualizado = DativoLote.query.get(lote.id)
-        item_atualizado = DativoItem.query.get(item_com_irrf.id)
+        lote_atualizado = db.session.get(DativoLote, lote.id)
+        item_atualizado = db.session.get(DativoItem, item_com_irrf.id)
         self.assertEqual(lote_atualizado.situacao_rpv_id, situacao_rpv_pago.id)
         self.assertEqual(item_atualizado.situacao_rpv_id, situacao_rpv_pago.id)
         self.assertEqual(lote_atualizado.situacao_imposto_id, self.situacao_imposto_sem_irrf_id)
@@ -3420,7 +4256,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         db.session.expire_all()
-        lote_atualizado = DativoLote.query.get(lote.id)
+        lote_atualizado = db.session.get(DativoLote, lote.id)
         itens_atualizados = DativoItem.query.filter_by(dativo_lote_id=lote.id, grupo="sem_irrf").all()
         self.assertEqual(lote_atualizado.situacao_rpv_id, situacao_pago.id)
         self.assertEqual(lote_atualizado.data_pagamento, self._data_base_mes_atual())
@@ -3468,7 +4304,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        item_atualizado = DativoItem.query.get(item.id)
+        item_atualizado = db.session.get(DativoItem, item.id)
         self.assertEqual(item_atualizado.situacao_rpv_id, situacao_pago.id)
         self.assertEqual(item_atualizado.data_pagamento, self._data_base_mes_atual())
         self.assertEqual(item_atualizado.numero_se, "2026SEITEMPAGO")
@@ -3523,7 +4359,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resposta_sem_confirmar.status_code, 200)
         self.assertIn("Confirme a edicao do valor bruto antes de salvar.", html_sem_confirmar)
         db.session.expire_all()
-        registro_sem_confirmar = RegistroRPV.query.get(registro.id)
+        registro_sem_confirmar = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_sem_confirmar.valor_bruto, Decimal("8000.00"))
         self.assertEqual(registro_sem_confirmar.valor_irrf, Decimal("500.00"))
 
@@ -3536,7 +4372,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         db.session.expire_all()
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.valor_bruto, Decimal("7500.00"))
         self.assertEqual(registro_atualizado.valor_irrf, Decimal("500.00"))
         self.assertEqual(registro_atualizado.valor_liquido, Decimal("7000.00"))
@@ -3600,7 +4436,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resposta_sem_confirmar.status_code, 200)
         self.assertIn("Confirme a edicao do valor bruto antes de salvar.", html_sem_confirmar)
         db.session.expire_all()
-        item_sem_confirmar = DativoItem.query.get(item.id)
+        item_sem_confirmar = db.session.get(DativoItem, item.id)
         self.assertEqual(item_sem_confirmar.valor_bruto, Decimal("7000.00"))
         self.assertEqual(item_sem_confirmar.valor_irrf, Decimal("700.00"))
 
@@ -3613,7 +4449,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         db.session.expire_all()
-        item_atualizado = DativoItem.query.get(item.id)
+        item_atualizado = db.session.get(DativoItem, item.id)
         self.assertEqual(item_atualizado.valor_bruto, Decimal("6500.00"))
         self.assertEqual(item_atualizado.valor_irrf, Decimal("450.00"))
         self.assertEqual(item_atualizado.valor_liquido, Decimal("6050.00"))
@@ -3700,7 +4536,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Confirme a alteracao manual da data do pagamento.", html)
-        lote_atualizado = DativoLote.query.get(lote.id)
+        lote_atualizado = db.session.get(DativoLote, lote.id)
         self.assertIsNone(lote_atualizado.data_pagamento)
 
     def test_dativo_lote_permuta_data_pagamento_manual_com_confirmacao(self):
@@ -3738,7 +4574,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        lote_atualizado = DativoLote.query.get(lote.id)
+        lote_atualizado = db.session.get(DativoLote, lote.id)
         self.assertEqual(lote_atualizado.data_pagamento, date(2026, 2, 20))
         itens_atualizados = DativoItem.query.filter_by(dativo_lote_id=lote.id, grupo="sem_irrf").all()
         self.assertTrue(itens_atualizados)
@@ -3825,7 +4661,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
         db.session.expire_all()
-        lote_atualizado = DativoLote.query.get(lote.id)
+        lote_atualizado = db.session.get(DativoLote, lote.id)
         itens_atualizados = DativoItem.query.filter_by(dativo_lote_id=lote.id, grupo="sem_irrf").all()
         self.assertEqual(lote_atualizado.situacao_rpv_id, situacao_cancelado.id)
         self.assertIsNone(lote_atualizado.data_pagamento)
@@ -3867,7 +4703,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Confirme a alteracao manual da data do pagamento.", html)
-        item_atualizado = DativoItem.query.get(item.id)
+        item_atualizado = db.session.get(DativoItem, item.id)
         self.assertIsNone(item_atualizado.data_pagamento)
 
     def test_item_com_irrf_permuta_data_pagamento_manual_com_confirmacao(self):
@@ -3904,7 +4740,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        item_atualizado = DativoItem.query.get(item.id)
+        item_atualizado = db.session.get(DativoItem, item.id)
         self.assertEqual(item_atualizado.data_pagamento, date(2026, 2, 20))
 
     def test_item_com_irrf_exibe_status_reinf_como_leitura_e_preserva_valor(self):
@@ -3941,7 +4777,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        item_atualizado = DativoItem.query.get(item.id)
+        item_atualizado = db.session.get(DativoItem, item.id)
         self.assertEqual(item_atualizado.reinf_status, "Concluído")
 
     def test_acompanhamento_exibe_documento_formatado_na_visao_resumida(self):
@@ -4032,14 +4868,132 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("O que pede continuidade agora", html)
-        self.assertIn("Minha fila ativa", html)
-        self.assertIn("C.I.s ativas em dativos", html)
-        self.assertIn("Fila ativa por módulo", html)
-        self.assertIn("Dativos pagos em", html)
-        self.assertIn("Pendências operacionais de IRRF", html)
+        self.assertIn("Sinalizacao geral de RPVs normais", html)
+        self.assertIn("Fila ativa por modulo", html)
+        self.assertIn("Sinalizacao geral de RPVs dativos", html)
+        self.assertNotIn("Dativos pagos em", html)
+        self.assertNotIn("priority-summary-row", html)
+        self.assertIn("Pendencias operacionais de IRRF", html)
         self.assertIn("Fechamento REINF de", html)
-        self.assertIn("Abrir REINF da competência", html)
+        self.assertIn("Abrir REINF da competencia", html)
         self.assertIn("Painel Critico", html)
+        self.assertIn("Responsavel: Usuário Teste", html)
+
+    def test_dashboard_home_sinaliza_rpvs_normais_por_responsavel_e_status(self):
+        usuario_secundario = User(
+            nome="Gabriel Apoio",
+            login="gabriel.apoio.dashboard",
+            email="gabriel.apoio.dashboard@controle-rpv.local",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_secundario.set_password("Senha1234")
+        db.session.add(usuario_secundario)
+        db.session.commit()
+
+        situacao_se = self._criar_situacao_empenho(
+            "SE Aguardando Aprovação",
+            ordem_fluxo=2,
+            is_final=False,
+        )
+        situacao_retorno = self._criar_situacao_empenho(
+            "Aguardando Retorno Banco",
+            ordem_fluxo=3,
+            is_final=False,
+        )
+
+        self._criar_rpv(
+            nome_beneficiario="RPV Sem Tratamento Setor",
+            valor_irrf=Decimal("0.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            elaborador_id=usuario_secundario.id,
+        )
+        registro_se = self._criar_rpv(
+            nome_beneficiario="RPV SE Setor",
+            valor_irrf=Decimal("0.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            elaborador_id=usuario_secundario.id,
+        )
+        registro_retorno = self._criar_rpv(
+            nome_beneficiario="RPV Retorno Banco Setor",
+            valor_irrf=Decimal("0.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            elaborador_id=self.user_id,
+        )
+        registro_se.situacao_empenho_id = situacao_se.id
+        registro_retorno.situacao_empenho_id = situacao_retorno.id
+        db.session.commit()
+
+        resposta = self.client.get("/")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("RPVs normais criticos: 3", html)
+        self.assertIn("Responsaveis sinalizados: 2", html)
+        self.assertIn("Gabriel Apoio", html)
+        self.assertIn("Sem tratamento", html)
+        self.assertIn("SE aguardando aprovacao", html)
+        self.assertIn("Aguardando retorno banco", html)
+        self.assertIn(f"responsavel={usuario_secundario.id}", html)
+        self.assertIn(f"situacao_empenho_id={situacao_se.id}", html)
+        self.assertIn(f"situacao_empenho_id={situacao_retorno.id}", html)
+
+    def test_dashboard_home_sinaliza_rpvs_dativos_por_responsavel_e_status(self):
+        usuario_secundario = User(
+            nome="Equipe Dativos",
+            login="equipe.dativos.dashboard",
+            email="equipe.dativos.dashboard@controle-rpv.local",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_secundario.set_password("Senha1234")
+        db.session.add(usuario_secundario)
+        db.session.commit()
+
+        situacao_se = self._criar_situacao_empenho(
+            "SE Aguardando Aprovação",
+            ordem_fluxo=2,
+            is_final=False,
+        )
+        situacao_retorno = self._criar_situacao_empenho(
+            "Aguardando Retorno Banco",
+            ordem_fluxo=3,
+            is_final=False,
+        )
+
+        _, lote_secundario, _ = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-DATIVO-HOME-UM",
+            itens=[
+                {"nome_beneficiario": "Dativo Sem Tratamento Um", "valor_bruto": Decimal("1800.00")},
+            ],
+            responsavel_id=usuario_secundario.id,
+        )
+        _, item_retorno = self._criar_item_dativo_com_irrf(
+            processo_edoc="CI-DATIVO-HOME-DOIS",
+            nome_beneficiario="Dativo Retorno Banco",
+            valor_bruto=Decimal("4200.00"),
+            valor_irrf=Decimal("420.00"),
+            responsavel_id=self.user_id,
+        )
+        lote_secundario.situacao_rpv_id = situacao_se.id
+        item_retorno.situacao_rpv_id = situacao_retorno.id
+        db.session.commit()
+
+        resposta = self.client.get("/")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Sinalizacao geral de RPVs dativos", html)
+        self.assertIn("Equipe Dativos", html)
+        self.assertIn("1 lote(s) sem IRRF | 0 item(ns) com IRRF", html)
+        self.assertIn("0 lote(s) sem IRRF | 1 item(ns) com IRRF", html)
+        self.assertIn('/dativos/cis?responsavel=todos', html)
+        self.assertIn(f"responsavel={usuario_secundario.id}", html)
+        self.assertIn(f"situacao_rpv_id={situacao_se.id}", html)
+        self.assertIn(f"situacao_rpv_id={situacao_retorno.id}", html)
 
     def test_dashboard_home_sinaliza_modulo_zerado_sem_destacar_pendencia(self):
         self._criar_dativo_sem_irrf(
@@ -4087,7 +5041,6 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Pendencias documentais: 1", html)
         self.assertIn("Pendencias documentais", html)
         self.assertIn("Abrir pendencias", html)
 
@@ -4103,7 +5056,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Alertas críticos de IRRF: 0", html)
+        self.assertIn("Alertas criticos de IRRF: 0", html)
         self.assertNotIn("Beneficiario Um", html)
         self.assertNotIn("Beneficiario Dois", html)
 
@@ -4119,7 +5072,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Alertas críticos de IRRF: 1", html)
+        self.assertIn("Alertas criticos de IRRF: 1", html)
         self.assertIn("Beneficiario no Corte", html)
         self.assertNotIn("Beneficiario Abaixo", html)
 
@@ -4138,7 +5091,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Alertas críticos de IRRF: 0", html)
+        self.assertIn("Alertas criticos de IRRF: 0", html)
         self.assertNotIn("Beneficiario Confirmado", html)
 
     def test_dashboard_home_separa_reinf_cancelado_de_concluido(self):
@@ -4174,7 +5127,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertRegex(
             html,
             re.compile(
-                r"Concluídos</span>\s*<strong>.*?<span class=\"value-amount\">0</span>",
+                r"Concluidos</span>\s*<strong>.*?<span class=\"value-amount\">0</span>",
                 re.S,
             ),
         )
@@ -4222,7 +5175,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertRegex(
             html,
             re.compile(
-                r"Registros do mês</span>\s*<strong>.*?<span class=\"value-amount\">3</span>",
+                r"Registros do mes</span>\s*<strong>.*?<span class=\"value-amount\">3</span>",
                 re.S,
             ),
         )
@@ -4236,7 +5189,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertRegex(
             html,
             re.compile(
-                r"Concluídos</span>\s*<strong>.*?<span class=\"value-amount\">1</span>",
+                r"Concluidos</span>\s*<strong>.*?<span class=\"value-amount\">1</span>",
                 re.S,
             ),
         )
@@ -4641,6 +5594,101 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("jan/2026", conteudo)
         self.assertNotIn("dez/2025", conteudo)
 
+    def test_bi_query_operacional_prioriza_pagamento_sobre_cadastro_em_rpvs(self):
+        rpv_pago_janeiro = self._criar_rpv(
+            nome_beneficiario="RPV Pago Janeiro Query",
+            valor_bruto=Decimal("3200.00"),
+            valor_irrf=Decimal("320.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 1, 19),
+            exercicio="2025-12",
+        )
+        rpv_aberto_janeiro = self._criar_rpv(
+            nome_beneficiario="RPV Aberto Janeiro Query",
+            valor_bruto=Decimal("2800.00"),
+            valor_irrf=Decimal("0.00"),
+            sem_irrf=True,
+            data_pagamento=None,
+            exercicio="2026-01",
+        )
+        rpv_pago_fevereiro = self._criar_rpv(
+            nome_beneficiario="RPV Pago Fevereiro Query",
+            valor_bruto=Decimal("4100.00"),
+            valor_irrf=Decimal("410.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 2, 4),
+            exercicio="2026-01",
+        )
+
+        filtros = {
+            "competencia_inicial": "2026-01",
+            "competencia_final": "2026-01",
+            "pagamento": "todos",
+        }
+
+        with self.app.test_request_context("/bi"):
+            registros = _query_registros_bi(filtros, visao="operacional").all()
+
+        ids = {registro.id for registro in registros}
+        self.assertIn(rpv_pago_janeiro.id, ids)
+        self.assertIn(rpv_aberto_janeiro.id, ids)
+        self.assertNotIn(rpv_pago_fevereiro.id, ids)
+
+    def test_bi_query_operacional_prioriza_pagamento_sobre_cadastro_em_dativos(self):
+        _, item_pago_janeiro = self._criar_item_dativo_com_irrf(
+            processo_edoc="CI-BI-QUERY-JAN",
+            nome_beneficiario="Dativo Pago Janeiro Query",
+            cpf_original="12345678901",
+            numero_processo="PROC-BI-QUERY-JAN",
+            valor_bruto=Decimal("5300.00"),
+            valor_irrf=Decimal("530.00"),
+        )
+        item_pago_janeiro.dativo_ci.exercicio = "2025-12"
+        item_pago_janeiro.data_pagamento = date(2026, 1, 21)
+
+        _, _, itens_abertos = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-BI-QUERY-ABERTO",
+            exercicio="2026-01",
+            itens=[
+                {
+                    "nome_beneficiario": "Dativo Aberto Janeiro Query",
+                    "cpf_original": "11122233344",
+                    "numero_processo": "PROC-BI-QUERY-ABERTO",
+                    "valor_bruto": Decimal("2700.00"),
+                    "data_pagamento": None,
+                }
+            ],
+        )
+        item_aberto_janeiro = itens_abertos[0]
+
+        _, item_pago_fevereiro = self._criar_item_dativo_com_irrf(
+            processo_edoc="CI-BI-QUERY-FEV",
+            nome_beneficiario="Dativo Pago Fevereiro Query",
+            cpf_original="99988877766",
+            numero_processo="PROC-BI-QUERY-FEV",
+            valor_bruto=Decimal("6100.00"),
+            valor_irrf=Decimal("610.00"),
+        )
+        item_pago_fevereiro.dativo_ci.exercicio = "2026-01"
+        item_pago_fevereiro.data_pagamento = date(2026, 2, 9)
+        db.session.commit()
+
+        filtros = {
+            "competencia_inicial": "2026-01",
+            "competencia_final": "2026-01",
+            "pagamento": "todos",
+        }
+
+        with self.app.test_request_context("/bi"):
+            itens = _query_dativos_bi(filtros, visao="operacional").all()
+
+        ids = {item.id for item in itens}
+        self.assertIn(item_pago_janeiro.id, ids)
+        self.assertIn(item_aberto_janeiro.id, ids)
+        self.assertNotIn(item_pago_fevereiro.id, ids)
+
     def test_bi_monta_series_prioritarias_e_irrf_com_janela_modular(self):
         tipo_trabalhista = TipoRPV(nome="RPV trabalhista", ativo=True, ordem_exibicao=3)
         tipo_pericial = TipoRPV(nome="RPV pericial", ativo=True, ordem_exibicao=4)
@@ -4952,6 +6000,62 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
         self.assertIn("Repetição confirmada pelo operador", evento_confirmacao.resumo)
 
+    def test_cadastro_manual_de_item_sem_irrf_reexibe_confirmacao_com_hidden_resetado(self):
+        dativo_ci, _, itens = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-DUP-RESET",
+            itens=[
+                {
+                    "nome_beneficiario": "Duplicidade Reset",
+                    "cpf_original": "11122233344",
+                    "numero_processo": "PROC-DUP-RESET",
+                    "valor_bruto": Decimal("1500.00"),
+                }
+            ],
+        )
+        item_original = itens[0]
+
+        resposta = self.client.post(
+            f"/dativos/ci/{dativo_ci.id}/adicionar-sem-irrf",
+            data={
+                "nome_beneficiario": "Duplicidade Reset 2",
+                "cpf_original": item_original.cpf_original,
+                "numero_processo": item_original.numero_processo,
+                "valor_bruto": "1500,00",
+                "observacoes": "Primeira tentativa sem confirmar",
+            },
+            follow_redirects=True,
+        )
+
+        html = resposta.get_data(as_text=True)
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn('id="confirmar_processo_existente_sem" value="0"', html)
+
+    def test_cadastro_manual_de_item_sem_irrf_salva_observacoes(self):
+        dativo_ci, _, _ = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-OBS-MANUAL",
+            itens=[],
+        )
+
+        resposta = self.client.post(
+            f"/dativos/ci/{dativo_ci.id}/adicionar-sem-irrf",
+            data={
+                "nome_beneficiario": "Beneficiario Observacao",
+                "cpf_original": "12345678901",
+                "numero_processo": "PROC-OBS-MANUAL",
+                "valor_bruto": "2200,00",
+                "observacoes": "Observacao inicial do beneficiario",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        item = DativoItem.query.filter_by(
+            dativo_ci_id=dativo_ci.id,
+            grupo="sem_irrf",
+            numero_processo="PROC-OBS-MANUAL",
+        ).one()
+        self.assertEqual(item.observacoes, "Observacao inicial do beneficiario")
+
     def test_importacao_unica_classifica_cpf_e_cnpj_sem_quebrar_fluxo_atual(self):
         dativo_ci = DativoCI(
             exercicio="2026-03",
@@ -5091,6 +6195,125 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
         self.assertEqual(len(itens), 2)
 
+    def test_importacao_unica_trata_processo_existente_no_sistema_como_pendencia(self):
+        self._criar_rpv(
+            nome_beneficiario="Processo Ja Existente",
+            documento_original="52998224725",
+            processo_edoc="CI-CROSS-UNICO",
+            numero_processo="PROC-CROSS-UNICO",
+        )
+
+        dativo_ci = DativoCI(
+            exercicio="2026-03",
+            processo_edoc="CI-IMPORT-CROSS-UNICO",
+            data_ci=date(2026, 3, 24),
+            descricao="Importacao unica com processo repetido",
+            criado_por_id=self.user_id,
+            responsavel_id=self.user_id,
+            atualizado_por_id=self.user_id,
+        )
+        db.session.add(dativo_ci)
+        db.session.commit()
+
+        caminho_planilha = self._criar_planilha_ods(
+            [
+                {
+                    "Nome": "Beneficiario Cruzado",
+                    "CPF/CNPJ": "11122233344",
+                    "Processo": "PROC-CROSS-UNICO",
+                    "Valor": "3200,00",
+                }
+            ],
+            nome_arquivo="dativos_cross_unico.ods",
+        )
+
+        with open(caminho_planilha, "rb") as arquivo:
+            resposta = self.client.post(
+                f"/dativos/ci/{dativo_ci.id}/importar-unico/analisar",
+                data={"arquivo_unico": (arquivo, "dativos_cross_unico.ods")},
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+
+        html = resposta.get_data(as_text=True)
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Pendencias para confirmacao", html)
+        self.assertIn("Processo ja encontrado no sistema", html)
+        self.assertEqual(
+            DativoItem.query.filter_by(dativo_ci_id=dativo_ci.id, grupo="sem_irrf").count(),
+            0,
+        )
+
+    def test_importacao_sem_irrf_com_processo_existente_exige_previa_e_confirmacao(self):
+        self._criar_rpv(
+            nome_beneficiario="Processo Ja Existente Sem IRRF",
+            documento_original="52998224725",
+            processo_edoc="CI-CROSS-SEM",
+            numero_processo="PROC-CROSS-SEM",
+        )
+
+        dativo_ci = DativoCI(
+            exercicio="2026-03",
+            processo_edoc="CI-IMPORT-CROSS-SEM",
+            data_ci=date(2026, 3, 24),
+            descricao="Importacao sem IRRF com processo repetido",
+            criado_por_id=self.user_id,
+            responsavel_id=self.user_id,
+            atualizado_por_id=self.user_id,
+        )
+        db.session.add(dativo_ci)
+        db.session.commit()
+
+        caminho_planilha = self._criar_planilha_ods(
+            [
+                {
+                    "Nome": "Beneficiario Sem IRRF Cruzado",
+                    "CPF/CNPJ": "11122233344",
+                    "Processo": "PROC-CROSS-SEM",
+                    "Valor": "2800,00",
+                }
+            ],
+            nome_arquivo="dativos_cross_sem.ods",
+        )
+
+        with open(caminho_planilha, "rb") as arquivo:
+            resposta = self.client.post(
+                f"/dativos/ci/{dativo_ci.id}/importar-sem-irrf",
+                data={"arquivo_sem_irrf": (arquivo, "dativos_cross_sem.ods")},
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+
+        html = resposta.get_data(as_text=True)
+        token_match = re.search(r'name="preview_token" value="([^"]+)"', html)
+        pendencia_match = re.search(r'name="pendencias_confirmadas" value="([^"]+)"', html)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Previa da importacao sem IRRF", html)
+        self.assertIn("Pendencias para confirmacao", html)
+        self.assertIn("Processo ja encontrado no sistema", html)
+        self.assertIsNotNone(token_match)
+        self.assertIsNotNone(pendencia_match)
+        self.assertEqual(
+            DativoItem.query.filter_by(dativo_ci_id=dativo_ci.id, grupo="sem_irrf").count(),
+            0,
+        )
+
+        resposta_confirmacao = self.client.post(
+            f"/dativos/ci/{dativo_ci.id}/importar-unico/confirmar",
+            data={
+                "preview_token": token_match.group(1),
+                "pendencias_confirmadas": [pendencia_match.group(1)],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta_confirmacao.status_code, 302)
+        self.assertEqual(
+            DativoItem.query.filter_by(dativo_ci_id=dativo_ci.id, grupo="sem_irrf").count(),
+            1,
+        )
+
     def test_edicao_item_lote_permite_confirmar_dispensa_irrf(self):
         _, lote, itens = self._criar_dativo_sem_irrf(
             processo_edoc="CI-DISP-IRRF",
@@ -5128,7 +6351,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        item_atualizado = DativoItem.query.get(item.id)
+        item_atualizado = db.session.get(DativoItem, item.id)
         self.assertTrue(item_atualizado.dispensa_irrf_confirmada)
 
         eventos = (
@@ -5149,6 +6372,37 @@ class RPVSemIRRFTestCase(unittest.TestCase):
                 for evento in eventos
             )
         )
+
+    def test_edicao_item_lote_salva_observacoes(self):
+        _, lote, itens = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-OBS-EDICAO",
+            itens=[
+                {
+                    "nome_beneficiario": "Beneficiario Observacao Edicao",
+                    "cpf_original": "12345678901",
+                    "numero_processo": "PROC-OBS-EDICAO",
+                    "valor_bruto": Decimal("2500.00"),
+                }
+            ],
+        )
+        item = itens[0]
+
+        resposta = self.client.post(
+            f"/dativos/lotes-sem-irrf/{lote.id}/item/{item.id}/editar",
+            data={
+                "nome_beneficiario": item.nome_beneficiario,
+                "cpf_original": item.cpf_original,
+                "numero_processo": item.numero_processo,
+                "valor_bruto": "2500,00",
+                "observacoes": "Observacao salva na edicao do lote",
+                "confirmar_processo_existente": "0",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        item_atualizado = db.session.get(DativoItem, item.id)
+        self.assertEqual(item_atualizado.observacoes, "Observacao salva na edicao do lote")
 
     def test_detalhe_lote_marca_beneficiario_com_pendencia_irrf(self):
         _, lote, itens = self._criar_dativo_sem_irrf(
@@ -5317,6 +6571,29 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
         self.assertIsNotNone(evento)
         self.assertIn("Processo repetido confirmado pelo operador", evento.resumo)
+
+    def test_novo_rpv_salva_observacoes_no_cadastro_inicial(self):
+        resposta = self.client.post(
+            "/rpvs/novo",
+            data={
+                "exercicio": "2026-03",
+                "processo_edoc": "CI-OBS-RPV",
+                "numero_processo": "PROC-OBS-RPV",
+                "data_ci": "2026-03-12",
+                "tipo_rpv_id": str(self.tipo_honorarios_id),
+                "nome_beneficiario": "RPV com Observacao",
+                "tipo_documento": "CPF",
+                "documento_original": "52998224725",
+                "valor_bruto": "5000,00",
+                "valor_irrf": "",
+                "observacoes": "Observacao criada no cadastro inicial",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        registro = RegistroRPV.query.filter_by(nome_beneficiario="RPV com Observacao").one()
+        self.assertEqual(registro.observacoes, "Observacao criada no cadastro inicial")
 
     def test_historico_registra_cadastro_e_edicao_de_rpv(self):
         registro = self._criar_rpv(
@@ -5649,7 +6926,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.reinf_status_legivel, "Concluído")
 
     def test_reinf_nao_sobrescreve_status_individual_sem_status_no_post(self):
@@ -5673,7 +6950,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.reinf_status, "Concluído")
 
     def test_reinf_nao_sobrescreve_status_lote_sem_status_no_post(self):
@@ -5696,7 +6973,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.reinf_status, "Cancelado")
 
     def test_admin_pode_limpar_status_reinf(self):
@@ -5720,7 +6997,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertIsNone(registro_atualizado.reinf_status)
 
         evento = HistoricoAlteracao.query.filter_by(
@@ -5765,7 +7042,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.reinf_status, "Concluído")
 
     def test_reinf_aplica_ordenacao_e_paginacao(self):
@@ -5817,6 +7094,27 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("sticky-left-1", html)
         self.assertIn("sticky-right-1", html)
 
+    def test_reinf_operacional_exibe_bloco_financeiro_com_bruto_e_irrf(self):
+        self._criar_rpv(
+            nome_beneficiario="REINF Financeiro",
+            valor_bruto=Decimal("4321.98"),
+            valor_irrf=Decimal("321.98"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 22),
+        )
+
+        resposta = self.client.get("/reinf/?competencia=2026-03&reinf_status=todos&q=Financeiro")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("reinf-finance-cell", html)
+        self.assertIn("Financeiro", html)
+        self.assertIn("Bruto", html)
+        self.assertIn("4.321,98", html)
+        self.assertIn("IRRF", html)
+        self.assertIn("321,98", html)
+
     def test_edicao_salva_data_pagamento_principal_e_irrf_em_campos_separados(self):
         registro = self._criar_rpv(
             nome_beneficiario="Edicao Datas",
@@ -5859,7 +7157,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 302)
 
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.data_pagamento, date(2026, 3, 20))
         self.assertEqual(registro_atualizado.data_pagamento_irrf, date(2026, 3, 25))
 
@@ -5910,7 +7208,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Confirme a alteracao manual da data do pagamento principal.", html)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertIsNone(registro_atualizado.data_pagamento)
         self.assertEqual(registro_atualizado.processo.exercicio, "2026-03")
 
@@ -5960,7 +7258,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.data_pagamento, date(2026, 2, 20))
         self.assertEqual(registro_atualizado.processo.exercicio, "2026-02")
         self.assertEqual(registro_atualizado.numero_se, "2026SE0100")
@@ -6010,7 +7308,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
 
         self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.reinf_status, "Concluído")
 
     def test_reinf_exclui_rpv_marcado_sem_irrf(self):
@@ -6107,7 +7405,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("Origem NE", html)
 
         db.session.expire_all()
-        registro_atualizado = RegistroRPV.query.get(registro_destino.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro_destino.id)
         self.assertIsNone(registro_atualizado.nota_empenho)
 
     def test_atualizacao_rapida_rpv_exige_ne_e_ob_para_marcar_pago(self):
@@ -6146,7 +7444,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("RPV Sem Referencias", html)
 
         db.session.expire_all()
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.situacao_empenho_id, self.situacao_empenho_id)
         self.assertIsNone(registro_atualizado.data_pagamento)
 
@@ -6184,7 +7482,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("RPV Lote Sem Referencias", html)
 
         db.session.expire_all()
-        registro_atualizado = RegistroRPV.query.get(registro.id)
+        registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.situacao_empenho_id, self.situacao_empenho_id)
 
     def test_item_com_irrf_impede_ob_repetida_e_indica_origem(self):
@@ -6224,7 +7522,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("Origem OB", html)
 
         db.session.expire_all()
-        item_atualizado = DativoItem.query.get(item.id)
+        item_atualizado = db.session.get(DativoItem, item.id)
         self.assertIsNone(item_atualizado.ordem_bancaria)
 
     def test_lote_sem_irrf_compartilha_ne_e_ob_com_os_itens_sem_gerar_auto_conflito(self):
@@ -6262,7 +7560,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resposta_inicial.status_code, 302)
 
         db.session.expire_all()
-        lote_atualizado = DativoLote.query.get(lote.id)
+        lote_atualizado = db.session.get(DativoLote, lote.id)
         itens_atualizados = DativoItem.query.filter_by(dativo_lote_id=lote.id, grupo="sem_irrf").all()
         self.assertTrue(itens_atualizados)
         self.assertTrue(all(item.nota_empenho == "2026NELOTE01" for item in itens_atualizados))
@@ -6311,7 +7609,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("CI-LOTE-SEM-REFERENCIAS", html)
 
         db.session.expire_all()
-        lote_atualizado = DativoLote.query.get(lote.id)
+        lote_atualizado = db.session.get(DativoLote, lote.id)
         self.assertEqual(lote_atualizado.situacao_rpv_id, self.situacao_empenho_id)
 
 

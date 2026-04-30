@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
@@ -6,10 +6,11 @@ from io import StringIO
 
 from flask import Blueprint, Response, render_template, request, url_for
 from flask_login import current_user, login_required
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import joinedload
 from unidecode import unidecode
 
-from app.models import DativoCI, DativoItem, DativoLote, RegistroRPV, RPVPendenciaDocumento, User
+from app.models import DativoCI, DativoItem, DativoLote, Processo, RegistroRPV, RPVPendenciaDocumento, User
 from app.utils.formatters import formatar_documento_br
 from app.utils.normalizers import normalizar_documento
 from app.utils.reinf_rules import (
@@ -76,10 +77,35 @@ JANELAS_GRAFICO_BI = {
     6: "6 meses",
     12: "12 meses",
 }
+STATUSES_PRIORITARIOS_RPV_HOME = (
+    {
+        "nome": "Sem Tratamento",
+        "slug": "sem-tratamento",
+        "label": "Sem tratamento",
+        "css_class": "priority-chip-neutral",
+    },
+    {
+        "nome": "SE Aguardando Aprovacao",
+        "slug": "se-aguardando-aprovacao",
+        "label": "SE aguardando aprovacao",
+        "css_class": "priority-chip-approval",
+    },
+    {
+        "nome": "Aguardando Retorno Banco",
+        "slug": "aguardando-retorno-banco",
+        "label": "Aguardando retorno banco",
+        "css_class": "priority-chip-bank",
+    },
+)
 
 
 def _normalizar_texto(valor: str | None) -> str:
     return unidecode(str(valor or "").strip()).lower()
+
+
+STATUSES_PRIORITARIOS_RPV_HOME_INDEX = {
+    _normalizar_texto(item["nome"]): item for item in STATUSES_PRIORITARIOS_RPV_HOME
+}
 
 
 def _competencia_atual() -> str:
@@ -167,6 +193,103 @@ def _competencia_no_intervalo(
     return True
 
 
+def _inicio_competencia(valor: str | None) -> date | None:
+    competencia = _competencia_normalizada(valor)
+    if not competencia:
+        return None
+
+    ano, mes = competencia.split("-", 1)
+    try:
+        return date(int(ano), int(mes), 1)
+    except ValueError:
+        return None
+
+
+def _proxima_competencia_data(valor: date) -> date:
+    if valor.month == 12:
+        return date(valor.year + 1, 1, 1)
+    return date(valor.year, valor.month + 1, 1)
+
+
+def _faixa_data_pagamento_bi(
+    competencia_inicial: str | None,
+    competencia_final: str | None,
+) -> tuple[date | None, date | None]:
+    inicio = _inicio_competencia(competencia_inicial)
+    fim = _inicio_competencia(competencia_final)
+    if fim:
+        fim = _proxima_competencia_data(fim)
+    return inicio, fim
+
+
+def _filtro_competencia_operacional_rpv(
+    competencia_inicial: str | None,
+    competencia_final: str | None,
+    *,
+    pagamento: str,
+):
+    competencia_inicial = _competencia_normalizada(competencia_inicial)
+    competencia_final = _competencia_normalizada(competencia_final)
+    if not (competencia_inicial or competencia_final):
+        return None
+
+    inicio_pagamento, fim_pagamento = _faixa_data_pagamento_bi(
+        competencia_inicial,
+        competencia_final,
+    )
+    filtros_pagos = [RegistroRPV.data_pagamento.isnot(None)]
+    if inicio_pagamento:
+        filtros_pagos.append(RegistroRPV.data_pagamento >= inicio_pagamento)
+    if fim_pagamento:
+        filtros_pagos.append(RegistroRPV.data_pagamento < fim_pagamento)
+
+    filtros_abertos = [RegistroRPV.data_pagamento.is_(None)]
+    if competencia_inicial:
+        filtros_abertos.append(RegistroRPV.processo.has(Processo.exercicio >= competencia_inicial))
+    if competencia_final:
+        filtros_abertos.append(RegistroRPV.processo.has(Processo.exercicio <= competencia_final))
+
+    if pagamento == "pagos":
+        return and_(*filtros_pagos)
+    if pagamento == "sem_data":
+        return and_(*filtros_abertos)
+    return or_(and_(*filtros_pagos), and_(*filtros_abertos))
+
+
+def _filtro_competencia_operacional_dativo(
+    competencia_inicial: str | None,
+    competencia_final: str | None,
+    *,
+    pagamento: str,
+):
+    competencia_inicial = _competencia_normalizada(competencia_inicial)
+    competencia_final = _competencia_normalizada(competencia_final)
+    if not (competencia_inicial or competencia_final):
+        return None
+
+    inicio_pagamento, fim_pagamento = _faixa_data_pagamento_bi(
+        competencia_inicial,
+        competencia_final,
+    )
+    filtros_pagos = [DativoItem.data_pagamento.isnot(None)]
+    if inicio_pagamento:
+        filtros_pagos.append(DativoItem.data_pagamento >= inicio_pagamento)
+    if fim_pagamento:
+        filtros_pagos.append(DativoItem.data_pagamento < fim_pagamento)
+
+    filtros_abertos = [DativoItem.data_pagamento.is_(None)]
+    if competencia_inicial:
+        filtros_abertos.append(DativoItem.dativo_ci.has(DativoCI.exercicio >= competencia_inicial))
+    if competencia_final:
+        filtros_abertos.append(DativoItem.dativo_ci.has(DativoCI.exercicio <= competencia_final))
+
+    if pagamento == "pagos":
+        return and_(*filtros_pagos)
+    if pagamento == "sem_data":
+        return and_(*filtros_abertos)
+    return or_(and_(*filtros_pagos), and_(*filtros_abertos))
+
+
 def _situacao_indica_fluxo_irrf(nome_situacao: str | None) -> bool:
     return _normalizar_texto(nome_situacao) not in {"", "sem irrf"}
 
@@ -187,6 +310,290 @@ def _situacao_exige_continuidade(situacao) -> bool:
     if not situacao:
         return True
     return not bool(getattr(situacao, "is_final", False))
+
+
+def _nome_responsavel_home(usuario, fallback: str = "Sem responsavel") -> str:
+    return str(getattr(usuario, "nome", "") or "").strip() or fallback
+
+
+def _status_prioritario_rpv_home(nome_situacao: str | None) -> dict | None:
+    return STATUSES_PRIORITARIOS_RPV_HOME_INDEX.get(_normalizar_texto(nome_situacao))
+
+
+def _resumo_setor_rpvs_home(*, rpvs: list[RegistroRPV]) -> dict:
+    responsaveis: dict[int | None, dict] = {}
+    totais_por_status: dict[str, dict] = {}
+
+    for registro in rpvs:
+        if getattr(registro, "status_principal_cancelado", False):
+            continue
+
+        situacao = getattr(registro, "situacao_empenho", None)
+        if not _situacao_exige_continuidade(situacao):
+            continue
+
+        definicao = _status_prioritario_rpv_home(getattr(situacao, "nome", None))
+        if not definicao:
+            continue
+
+        responsavel_id = getattr(registro, "elaborador_id", None)
+        responsavel_nome = _nome_responsavel_home(getattr(registro, "elaborador", None))
+        bloco_responsavel = responsaveis.setdefault(
+            responsavel_id,
+            {
+                "responsavel_id": responsavel_id,
+                "responsavel_nome": responsavel_nome,
+                "total": 0,
+                "status_map": {},
+                "url": url_for(
+                    "cadastros.lista_rpvs",
+                    responsavel=responsavel_id if responsavel_id is not None else "todos",
+                ),
+            },
+        )
+
+        bloco_status = bloco_responsavel["status_map"].setdefault(
+            definicao["slug"],
+            {
+                "slug": definicao["slug"],
+                "label": definicao["label"],
+                "css_class": definicao["css_class"],
+                "quantidade": 0,
+                "situacao_id": getattr(situacao, "id", None),
+            },
+        )
+        bloco_status["quantidade"] += 1
+        bloco_responsavel["total"] += 1
+
+        total_status = totais_por_status.setdefault(
+            definicao["slug"],
+            {
+                "slug": definicao["slug"],
+                "label": definicao["label"],
+                "css_class": definicao["css_class"],
+                "quantidade": 0,
+                "situacao_id": getattr(situacao, "id", None),
+            },
+        )
+        total_status["quantidade"] += 1
+
+    usuarios = []
+    for responsavel in responsaveis.values():
+        status_items = []
+        for definicao in STATUSES_PRIORITARIOS_RPV_HOME:
+            item = responsavel["status_map"].get(definicao["slug"])
+            if not item:
+                continue
+            status_items.append(
+                {
+                    **item,
+                    "url": url_for(
+                        "cadastros.lista_rpvs",
+                        responsavel=(
+                            responsavel["responsavel_id"]
+                            if responsavel["responsavel_id"] is not None
+                            else "todos"
+                        ),
+                        situacao_empenho_id=item["situacao_id"],
+                    ),
+                }
+            )
+
+        usuarios.append(
+            {
+                "responsavel_id": responsavel["responsavel_id"],
+                "responsavel_nome": responsavel["responsavel_nome"],
+                "total": responsavel["total"],
+                "status_items": status_items,
+                "url": responsavel["url"],
+            }
+        )
+
+    usuarios.sort(
+        key=lambda item: (
+            -item["total"],
+            0 if item["responsavel_id"] == current_user.id else 1,
+            _normalizar_texto(item["responsavel_nome"]),
+        )
+    )
+
+    totais = []
+    for definicao in STATUSES_PRIORITARIOS_RPV_HOME:
+        item = totais_por_status.get(definicao["slug"])
+        if not item:
+            continue
+        totais.append(
+            {
+                **item,
+                "url": url_for(
+                    "cadastros.lista_rpvs",
+                    responsavel="todos",
+                    situacao_empenho_id=item["situacao_id"],
+                ),
+            }
+        )
+
+    return {
+        "usuarios": usuarios,
+        "totais": totais,
+        "total_quantidade": sum(item["quantidade"] for item in totais),
+        "total_responsaveis": len(usuarios),
+    }
+
+
+def _resumo_setor_dativos_home(
+    *,
+    lotes_sem_irrf: list[DativoLote],
+    dativo_items: list[DativoItem],
+) -> dict:
+    responsaveis: dict[int | None, dict] = {}
+    totais_por_status: dict[str, dict] = {}
+
+    def registrar(status_obj, responsavel_id, responsavel_nome, *, origem: str):
+        definicao = _status_prioritario_rpv_home(getattr(status_obj, "nome", None))
+        if not definicao:
+            return
+
+        bloco_responsavel = responsaveis.setdefault(
+            responsavel_id,
+            {
+                "responsavel_id": responsavel_id,
+                "responsavel_nome": responsavel_nome,
+                "total": 0,
+                "total_lotes": 0,
+                "total_itens": 0,
+                "status_map": {},
+                "url": url_for(
+                    "dativos.lista_cis",
+                    responsavel=responsavel_id if responsavel_id is not None else "todos",
+                ),
+            },
+        )
+
+        bloco_status = bloco_responsavel["status_map"].setdefault(
+            definicao["slug"],
+            {
+                "slug": definicao["slug"],
+                "label": definicao["label"],
+                "css_class": definicao["css_class"],
+                "quantidade": 0,
+                "situacao_id": getattr(status_obj, "id", None),
+            },
+        )
+        bloco_status["quantidade"] += 1
+        bloco_responsavel["total"] += 1
+
+        if origem == "lote":
+            bloco_responsavel["total_lotes"] += 1
+        else:
+            bloco_responsavel["total_itens"] += 1
+
+        total_status = totais_por_status.setdefault(
+            definicao["slug"],
+            {
+                "slug": definicao["slug"],
+                "label": definicao["label"],
+                "css_class": definicao["css_class"],
+                "quantidade": 0,
+                "situacao_id": getattr(status_obj, "id", None),
+            },
+        )
+        total_status["quantidade"] += 1
+
+    for lote in lotes_sem_irrf:
+        if getattr(lote, "status_principal_cancelado", False):
+            continue
+        situacao = getattr(lote, "situacao_rpv", None)
+        if not _situacao_exige_continuidade(situacao):
+            continue
+        registrar(
+            situacao,
+            getattr(lote, "responsavel_id", None),
+            _nome_responsavel_home(getattr(lote, "responsavel", None)),
+            origem="lote",
+        )
+
+    for item in dativo_items:
+        if item.grupo != "com_irrf":
+            continue
+        if getattr(item, "status_principal_cancelado", False):
+            continue
+        situacao = getattr(item, "situacao_rpv", None)
+        if not _situacao_exige_continuidade(situacao):
+            continue
+        registrar(
+            situacao,
+            getattr(item, "responsavel_id", None),
+            _nome_responsavel_home(getattr(item, "responsavel", None)),
+            origem="item",
+        )
+
+    usuarios = []
+    for responsavel in responsaveis.values():
+        status_items = []
+        for definicao in STATUSES_PRIORITARIOS_RPV_HOME:
+            item = responsavel["status_map"].get(definicao["slug"])
+            if not item:
+                continue
+            status_items.append(
+                {
+                    **item,
+                    "url": url_for(
+                        "dativos.lista_cis",
+                        responsavel=(
+                            responsavel["responsavel_id"]
+                            if responsavel["responsavel_id"] is not None
+                            else "todos"
+                        ),
+                        situacao_rpv_id=item["situacao_id"],
+                    ),
+                }
+            )
+
+        usuarios.append(
+            {
+                "responsavel_id": responsavel["responsavel_id"],
+                "responsavel_nome": responsavel["responsavel_nome"],
+                "total": responsavel["total"],
+                "total_lotes": responsavel["total_lotes"],
+                "total_itens": responsavel["total_itens"],
+                "status_items": status_items,
+                "url": responsavel["url"],
+            }
+        )
+
+    usuarios.sort(
+        key=lambda item: (
+            -item["total"],
+            0 if item["responsavel_id"] == current_user.id else 1,
+            _normalizar_texto(item["responsavel_nome"]),
+        )
+    )
+
+    totais = []
+    for definicao in STATUSES_PRIORITARIOS_RPV_HOME:
+        item = totais_por_status.get(definicao["slug"])
+        if not item:
+            continue
+        totais.append(
+            {
+                **item,
+                "url": url_for(
+                    "dativos.lista_cis",
+                    responsavel="todos",
+                    situacao_rpv_id=item["situacao_id"],
+                ),
+            }
+        )
+
+    return {
+        "usuarios": usuarios,
+        "totais": totais,
+        "total_quantidade": sum(item["quantidade"] for item in totais),
+        "total_responsaveis": len(usuarios),
+        "total_lotes": sum(item["total_lotes"] for item in usuarios),
+        "total_itens": sum(item["total_itens"] for item in usuarios),
+    }
 
 
 def _tem_irrf_rpv(registro: RegistroRPV) -> bool:
@@ -237,7 +644,7 @@ def _abrir_url_dativo(item: DativoItem) -> str:
 
 
 def _reinf_status_bi(status: str | None, tem_irrf: bool) -> str:
-    return status or ("Não enviado" if tem_irrf else "Não se aplica")
+    return status or ("Nao enviado" if tem_irrf else "Nao se aplica")
 
 
 def _match_reinf_bi(status: str, filtro: str) -> bool:
@@ -536,25 +943,129 @@ def _registro_bi_dativo(item: DativoItem) -> dict:
     }
 
 
-def _coletar_dataset_bi() -> list[dict]:
-    registros = (
+def _query_registros_bi(
+    filtros: dict[str, str] | None = None,
+    *,
+    visao: str = "operacional",
+):
+    query = (
         RegistroRPV.query.options(
             joinedload(RegistroRPV.elaborador),
             joinedload(RegistroRPV.tipo_rpv),
             joinedload(RegistroRPV.situacao_imposto),
+            joinedload(RegistroRPV.situacao_empenho),
             joinedload(RegistroRPV.processo),
         )
-        .filter_by(ativo=True)
-        .all()
+        .filter(RegistroRPV.ativo.is_(True))
     )
-    dativo_items = (
+
+    if not filtros:
+        return query
+
+    origem = str(filtros.get("origem") or "").strip()
+    if origem not in ("", "todos", "rpv_normal"):
+        return query.filter(RegistroRPV.id == -1)
+
+    responsavel = str(filtros.get("responsavel") or "").strip()
+    if responsavel == "meus":
+        query = query.filter(RegistroRPV.elaborador_id == current_user.id)
+    elif responsavel not in ("", "todos"):
+        query = query.filter(RegistroRPV.elaborador_id == responsavel)
+
+    pagamento = _normalizar_texto(filtros.get("pagamento"))
+    visao_bi = _visao_bi(visao)
+    if visao_bi == "conferencia" or pagamento == "pagos":
+        query = query.filter(RegistroRPV.data_pagamento.isnot(None))
+    elif pagamento == "sem_data":
+        query = query.filter(RegistroRPV.data_pagamento.is_(None))
+
+    if visao_bi == "conferencia":
+        inicio, fim = _faixa_data_pagamento_bi(
+            filtros.get("competencia_inicial"),
+            filtros.get("competencia_final"),
+        )
+        if inicio:
+            query = query.filter(RegistroRPV.data_pagamento >= inicio)
+        if fim:
+            query = query.filter(RegistroRPV.data_pagamento < fim)
+    else:
+        filtro_operacional = _filtro_competencia_operacional_rpv(
+            filtros.get("competencia_inicial"),
+            filtros.get("competencia_final"),
+            pagamento=pagamento,
+        )
+        if filtro_operacional is not None:
+            query = query.filter(filtro_operacional)
+
+    return query
+
+
+def _query_dativos_bi(
+    filtros: dict[str, str] | None = None,
+    *,
+    visao: str = "operacional",
+):
+    query = (
         DativoItem.query.options(
             joinedload(DativoItem.dativo_ci).joinedload(DativoCI.responsavel),
             joinedload(DativoItem.dativo_lote),
+            joinedload(DativoItem.situacao_rpv),
         )
-        .filter_by(ativo=True)
-        .all()
+        .filter(DativoItem.ativo.is_(True))
     )
+
+    if not filtros:
+        return query
+
+    origem = str(filtros.get("origem") or "").strip()
+    if origem == "rpv_normal":
+        return query.filter(DativoItem.id == -1)
+    if origem == "dativo_com_irrf":
+        query = query.filter(DativoItem.grupo == "com_irrf")
+    elif origem == "dativo_sem_irrf":
+        query = query.filter(DativoItem.grupo == "sem_irrf")
+
+    responsavel = str(filtros.get("responsavel") or "").strip()
+    if responsavel == "meus":
+        query = query.join(DativoItem.dativo_ci).filter(DativoCI.responsavel_id == current_user.id)
+    elif responsavel not in ("", "todos"):
+        query = query.join(DativoItem.dativo_ci).filter(DativoCI.responsavel_id == responsavel)
+
+    pagamento = _normalizar_texto(filtros.get("pagamento"))
+    visao_bi = _visao_bi(visao)
+    if visao_bi == "conferencia" or pagamento == "pagos":
+        query = query.filter(DativoItem.data_pagamento.isnot(None))
+    elif pagamento == "sem_data":
+        query = query.filter(DativoItem.data_pagamento.is_(None))
+
+    if visao_bi == "conferencia":
+        inicio, fim = _faixa_data_pagamento_bi(
+            filtros.get("competencia_inicial"),
+            filtros.get("competencia_final"),
+        )
+        if inicio:
+            query = query.filter(DativoItem.data_pagamento >= inicio)
+        if fim:
+            query = query.filter(DativoItem.data_pagamento < fim)
+    else:
+        filtro_operacional = _filtro_competencia_operacional_dativo(
+            filtros.get("competencia_inicial"),
+            filtros.get("competencia_final"),
+            pagamento=pagamento,
+        )
+        if filtro_operacional is not None:
+            query = query.filter(filtro_operacional)
+
+    return query
+
+
+def _coletar_dataset_bi(
+    filtros: dict[str, str] | None = None,
+    *,
+    visao: str = "operacional",
+) -> list[dict]:
+    registros = _query_registros_bi(filtros, visao=visao).all()
+    dativo_items = _query_dativos_bi(filtros, visao=visao).all()
 
     dataset = [
         _registro_bi_rpv(registro)
@@ -785,10 +1296,6 @@ def _resumo_dativos_competencia(dataset: list[dict], competencia_referencia: str
     }
 
 
-def _resumo_dativos_mes_atual(dataset: list[dict]) -> dict:
-    return _resumo_dativos_competencia(dataset, _competencia_atual())
-
-
 def _resumo_pendencias_bi(dataset: list[dict]) -> dict:
     linhas_pagas = _linhas_bi_pagas(dataset)
     linhas_em_aberto = _linhas_bi_em_aberto(dataset)
@@ -818,13 +1325,13 @@ def _resumo_pendencias_bi(dataset: list[dict]) -> dict:
                 "label": "Sem IRRF em aberto",
                 "quantidade": len(aberto_sem_irrf),
                 "valor_total": sum((row["valor_previsto_aberto"] for row in aberto_sem_irrf), Decimal("0.00")),
-                "nota": "Carteira fora da retenção no recorte",
+                "nota": "Carteira fora da retencao no recorte",
             },
             {
                 "label": "REINF pendente",
                 "quantidade": len(reinf_pendentes),
                 "valor_total": sum((row["valor_irrf"] for row in reinf_pendentes), Decimal("0.00")),
-                "nota": "Pagamentos com IRRF que ainda aguardam envio ou decisão",
+                "nota": "Pagamentos com IRRF que ainda aguardam envio ou decisao",
             },
         ]
     }
@@ -1623,7 +2130,7 @@ def _cards_bi(dataset: list[dict], resumo_grupos: dict | None = None) -> list[di
             "label": f"Pago em {resumo_grupos['competencia_legivel']}",
             "valor": resumo_grupos["total_mes_pago"],
             "tipo": "moeda",
-            "nota": "Somente valores efetivamente pagos na competência",
+            "nota": "Somente valores efetivamente pagos na competencia",
         },
         {
             "label": f"Pago em {resumo_grupos['ano_referencia']}",
@@ -1797,9 +2304,11 @@ def index():
     )
     competencia_reinf_fechamento_legivel = _competencia_legivel(competencia_reinf_fechamento)
 
-    dativos_cis = DativoCI.query.order_by(DativoCI.criado_em.desc()).all()
     lotes_sem_irrf = (
-        DativoLote.query.options(joinedload(DativoLote.dativo_ci))
+        DativoLote.query.options(
+            joinedload(DativoLote.dativo_ci).joinedload(DativoCI.responsavel),
+            joinedload(DativoLote.situacao_rpv),
+        )
         .filter_by(tipo_lote="sem_irrf")
         .order_by(DativoLote.criado_em.desc())
         .all()
@@ -1808,7 +2317,9 @@ def index():
         RegistroRPV.query.options(
             joinedload(RegistroRPV.tipo_rpv),
             joinedload(RegistroRPV.situacao_imposto),
+            joinedload(RegistroRPV.situacao_empenho),
             joinedload(RegistroRPV.processo),
+            joinedload(RegistroRPV.elaborador),
         )
         .filter_by(ativo=True)
         .order_by(RegistroRPV.criado_em.desc())
@@ -1823,11 +2334,11 @@ def index():
         .order_by(RPVPendenciaDocumento.criado_em.desc())
         .all()
     )
-
     dativo_items = (
         DativoItem.query.options(
-            joinedload(DativoItem.dativo_ci),
+            joinedload(DativoItem.dativo_ci).joinedload(DativoCI.responsavel),
             joinedload(DativoItem.dativo_lote),
+            joinedload(DativoItem.situacao_rpv),
         )
         .filter_by(ativo=True)
         .order_by(DativoItem.criado_em.desc())
@@ -1835,8 +2346,6 @@ def index():
     )
 
     alertas_irrf = []
-    total_pagamentos_mes = 0
-    valor_pago_mes = Decimal("0.00")
 
     for registro in rpvs:
         if getattr(registro, "status_principal_cancelado", False):
@@ -1845,10 +2354,6 @@ def index():
         nome_tipo = getattr(getattr(registro, "tipo_rpv", None), "nome", None) or "Sem tipo"
         valor_bruto = _decimal(registro.valor_bruto)
 
-        if registro.data_pagamento and registro.data_pagamento.strftime("%Y-%m") == competencia_atual:
-            total_pagamentos_mes += 1
-            valor_pago_mes += valor_bruto
-
         if _rpv_precisa_alerta_irrf(registro):
             alertas_irrf.append(
                 {
@@ -1856,24 +2361,18 @@ def index():
                     "origem": "RPV normal",
                     "descricao": nome_tipo,
                     "meta": f"Processo {getattr(getattr(registro, 'processo', None), 'numero_processo', '-')}",
+                    "responsavel": _nome_responsavel_home(getattr(registro, "elaborador", None)),
                     "acao": "Revisar IRRF",
                     "valor": valor_bruto,
                     "url": url_for("cadastros.editar_rpv", registro_id=registro.id),
                 }
             )
 
-    total_cis_dativos = len(dativos_cis)
-
     for item in dativo_items:
         if getattr(item, "status_principal_cancelado", False):
             continue
 
         valor_bruto = _decimal(item.valor_bruto)
-
-        if item.grupo == "com_irrf":
-            if item.data_pagamento and item.data_pagamento.strftime("%Y-%m") == competencia_atual:
-                total_pagamentos_mes += 1
-                valor_pago_mes += valor_bruto
 
         if _item_dativo_sem_irrf_precisa_alerta(item):
             alertas_irrf.append(
@@ -1885,6 +2384,7 @@ def index():
                         f"C.I. {getattr(getattr(item, 'dativo_ci', None), 'processo_edoc', '-')}"
                         f" | Processo {item.numero_processo or '-'}"
                     ),
+                    "responsavel": _nome_responsavel_home(getattr(item, "responsavel", None)),
                     "acao": "Revisar beneficiário",
                     "valor": valor_bruto,
                     "url": _abrir_url_dativo(item),
@@ -1897,21 +2397,17 @@ def index():
         dativo_items=[item for item in dativo_items if not getattr(item, "status_principal_cancelado", False)],
         pendencias_documentais=pendencias_documentais,
     )
-    total_pendencias_documentais = sum(
-        1
-        for pendencia in pendencias_documentais
-        if (
-            pendencia.responsavel_id == current_user.id
-            or pendencia.criado_por_id == current_user.id
-        )
+    resumo_setor_rpvs = _resumo_setor_rpvs_home(rpvs=rpvs)
+    resumo_setor_dativos = _resumo_setor_dativos_home(
+        lotes_sem_irrf=lotes_sem_irrf,
+        dativo_items=dativo_items,
     )
-    dataset_dativos_home = [
-        _registro_bi_dativo(item)
-        for item in dativo_items
-        if not getattr(item, "status_principal_cancelado", False)
-    ]
-    dativos_mes = _resumo_dativos_mes_atual(dataset_dativos_home)
-    serie_dativos = _serie_dativos_ultimas_competencias(dataset_dativos_home)
+    total_responsaveis_sinalizados = len(
+        {
+            item["responsavel_id"]
+            for item in resumo_setor_rpvs["usuarios"] + resumo_setor_dativos["usuarios"]
+        }
+    )
 
     alertas_irrf.sort(key=lambda item: (item["valor"], item["titulo"]), reverse=True)
     registros_reinf_mes = _coletar_base_reinf(competencia_reinf_fechamento, "todos", "")
@@ -1930,7 +2426,6 @@ def index():
         Decimal("0.00"),
     )
     total_alertas_irrf = len(alertas_irrf)
-    total_pendencias_fiscais = total_alertas_irrf + total_reinf_mes_pendente
     alertas_exibidos = alertas_irrf[:6]
 
     prestacao_mensal = {
@@ -1943,55 +2438,14 @@ def index():
         "url": url_for("reinf.index", competencia=competencia_reinf_fechamento),
     }
 
-    cards = [
-        {
-            "label": "Minha fila ativa",
-            "valor": fila_operacional["total_quantidade"],
-            "tipo": "numero",
-            "nota": "Registros sob sua responsabilidade que ainda pedem continuidade",
-            "valor_auxiliar": fila_operacional["total_valor"],
-            "tipo_auxiliar": "moeda",
-            "rotulo_auxiliar": "Valor bruto em acompanhamento",
-        },
-        {
-            "label": f"Pagamentos em {competencia_atual_legivel}",
-            "valor": valor_pago_mes,
-            "tipo": "moeda",
-            "nota": "Pagamentos lançados na competência atual",
-            "valor_auxiliar": total_pagamentos_mes,
-            "tipo_auxiliar": "numero",
-            "rotulo_auxiliar": "Registros pagos",
-        },
-        {
-            "label": f"Dativos pagos em {dativos_mes['competencia_legivel']}",
-            "valor": dativos_mes["total_valor"],
-            "tipo": "moeda",
-            "nota": "Quanto do mês veio do fluxo de dativos",
-            "valor_auxiliar": dativos_mes["total_quantidade"],
-            "tipo_auxiliar": "numero",
-            "rotulo_auxiliar": "Beneficiários pagos",
-        },
-        {
-            "label": "Pendências fiscais",
-            "valor": total_pendencias_fiscais,
-            "tipo": "numero",
-            "nota": "Fila crítica de IRRF somada à REINF ainda pendente no fechamento",
-            "valor_auxiliar": total_alertas_irrf,
-            "tipo_auxiliar": "numero",
-            "rotulo_auxiliar": "Alertas críticos de IRRF",
-        },
-    ]
-
     return render_template(
         "dashboard/index.html",
         usuario=current_user,
         competencia_atual_legivel=competencia_atual_legivel,
-        total_cis_dativos=total_cis_dativos,
-        cards=cards,
         fila_operacional=fila_operacional,
-        total_pendencias_documentais=total_pendencias_documentais,
-        dativos_mes=dativos_mes,
-        serie_dativos=serie_dativos,
+        resumo_setor_rpvs=resumo_setor_rpvs,
+        resumo_setor_dativos=resumo_setor_dativos,
+        total_responsaveis_sinalizados=total_responsaveis_sinalizados,
         alertas_irrf=alertas_exibidos,
         total_alertas_irrf=total_alertas_irrf,
         prestacao_mensal=prestacao_mensal,
@@ -2003,7 +2457,7 @@ def index():
 def bi():
     filtros = _filtros_bi_da_requisicao()
     visao_bi = _visao_bi(filtros.get("visao"))
-    dataset = _coletar_dataset_bi()
+    dataset = _coletar_dataset_bi(filtros, visao=visao_bi)
     dataset_filtrado = _filtrar_dataset_bi(dataset, filtros, visao=visao_bi)
     janela_meses = _janela_meses_bi(filtros.get("janela_meses"))
     resumo_grupos = _resumo_grupos_cota(dataset_filtrado, filtros)
@@ -2090,21 +2544,21 @@ def bi():
 @login_required
 def exportar_bi_csv():
     filtros = _filtros_bi_da_requisicao()
-    dataset = _filtrar_dataset_bi(_coletar_dataset_bi(), filtros)
+    dataset = _filtrar_dataset_bi(_coletar_dataset_bi(filtros), filtros)
     buffer = StringIO()
     writer = csv.writer(buffer, delimiter=";")
 
     writer.writerow(
         [
-            "Competência cadastro",
-            "Competência pagamento",
+            "Competencia cadastro",
+            "Competencia pagamento",
             "Status pagamento",
             "Origem",
             "Grupo",
             "Tipo",
             "Fluxo IRRF",
-            "Responsável",
-            "Beneficiário",
+            "Responsavel",
+            "Beneficiario",
             "Documento",
             "Processo",
             "C.I.",
@@ -2113,7 +2567,7 @@ def exportar_bi_csv():
             "Valor pago",
             "Valor em aberto",
             "Valor IRRF",
-            "Valor líquido",
+            "Valor liquido",
             "REINF",
         ]
     )
@@ -2156,7 +2610,11 @@ def exportar_bi_csv():
 @login_required
 def exportar_bi_conferencia_csv():
     filtros = _filtros_bi_da_requisicao()
-    dataset = _filtrar_dataset_bi(_coletar_dataset_bi(), filtros, visao="conferencia")
+    dataset = _filtrar_dataset_bi(
+        _coletar_dataset_bi(filtros, visao="conferencia"),
+        filtros,
+        visao="conferencia",
+    )
     conferencia = _conferencia_bi(dataset)
     buffer = StringIO()
     writer = csv.writer(buffer, delimiter=";")
@@ -2208,3 +2666,4 @@ def exportar_bi_conferencia_csv():
         content_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
     )
+

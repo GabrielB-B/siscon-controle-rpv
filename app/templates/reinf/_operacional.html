@@ -158,6 +158,7 @@
     <div class="reinf-toolbar">
         <form id="reinf-bulk-form" method="POST" action="{{ url_for('reinf.atualizar_status_lote') }}" class="reinf-bulk-actions">
             {{ csrf_input() }}
+            <input type="hidden" name="retorno" value="{{ url_retorno_atual }}">
             <select name="reinf_status_lote">
                 {% for opcao in reinf_status_opcoes %}
                     <option value="{{ opcao }}">{{ opcao }}</option>
@@ -208,9 +209,9 @@
                             </a>
                         </th>
                         <th>Resumo operacional</th>
-                        <th>
-                            <a class="table-sort-link {% if ordenar_atual == 'imposto' %}is-active{% endif %}" href="{{ sort_urls.imposto }}">
-                                IRRF
+                        <th class="reinf-finance-header">
+                            <a class="table-sort-link {% if ordenar_atual == 'imposto' %}is-active{% endif %}" href="{{ sort_urls.imposto }}" title="Ordenar por IRRF">
+                                Financeiro
                                 {% if ordenar_atual == 'imposto' %}
                                     <span class="sort-indicator">{% if direcao_atual == 'asc' %}▲{% else %}▼{% endif %}</span>
                                 {% endif %}
@@ -253,14 +254,24 @@
                                     {{ registro.resumo_operacional }}
                                 </div>
                             </td>
-                            <td class="reinf-money">
-                                {{ values.render_value(registro.imposto, 'moeda', 'compact') }}
+                            <td class="reinf-finance-cell">
+                                <div class="reinf-finance-stack">
+                                    <div class="reinf-finance-line">
+                                        <span class="reinf-finance-label">Bruto</span>
+                                        {{ values.render_value(registro.valor, 'moeda', 'compact') }}
+                                    </div>
+                                    <div class="reinf-finance-line is-secondary">
+                                        <span class="reinf-finance-label">IRRF</span>
+                                        {{ values.render_value(registro.imposto, 'moeda', 'compact') }}
+                                    </div>
+                                </div>
                             </td>
                             <td>
                                 <form method="POST" action="{{ url_for('reinf.atualizar_status') }}" class="reinf-inline-form">
                                     {{ csrf_input() }}
                                     <input type="hidden" name="origem" value="{{ registro.origem }}">
                                     <input type="hidden" name="registro_id" value="{{ registro.registro_id }}">
+                                    <input type="hidden" name="retorno" value="{{ url_retorno_atual }}">
                                     <div class="reinf-inline-actions">
                                         <select name="reinf_status" class="status-inline">
                                             {% for opcao in reinf_status_opcoes %}
@@ -281,6 +292,7 @@
                                         {{ csrf_input() }}
                                         <input type="hidden" name="origem" value="{{ registro.origem }}">
                                         <input type="hidden" name="registro_id" value="{{ registro.registro_id }}">
+                                        <input type="hidden" name="retorno" value="{{ url_retorno_atual }}">
                                         <button type="submit" class="btn btn-secondary btn-sm">Limpar (admin)</button>
                                     </form>
                                     {% endif %}

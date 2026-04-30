@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Codigos de recuperacao - SISCON{% endblock %}
+{% block topbar_title %}Codigos de recuperacao{% endblock %}
+{% block topbar_subtitle %}Caixa local de notificacoes do servidor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Codigos de recuperacao</h1>
+        <p class="muted">
+            Use esta tela apenas quando a instalacao estiver em modo local e o envio real
+            por email/SMS ainda nao estiver configurado.
+        </p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('usuarios.lista') }}">Voltar para usuarios</a>
+    </div>
+</div>
+
+<section class="users-card">
+    <div class="section-heading">
+        <div>
+            <p class="section-kicker">Entrega local</p>
+            <h2>Ultimos codigos gerados</h2>
+            <p class="muted">
+                Modo atual: <strong>{{ delivery_mode|upper }}</strong>.
+                Pasta local: <code>{{ outbox_dir }}</code>
+            </p>
+        </div>
+        <div class="muted">{{ notificacoes|length }} notificacao(oes)</div>
+    </div>
+
+    {% if notificacoes %}
+        <div class="table-wrap">
+            <table class="users-table">
+                <thead>
+                    <tr>
+                        <th>Gerado em</th>
+                        <th>Canal</th>
+                        <th>Destino</th>
+                        <th>Codigo</th>
+                        <th>Arquivo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for notificacao in notificacoes %}
+                        <tr>
+                            <td>{{ notificacao.created_at or '-' }}</td>
+                            <td>{{ (notificacao.channel or '-')|upper }}</td>
+                            <td>{{ notificacao.destination or '-' }}</td>
+                            <td><strong>{{ notificacao.codigo or 'Nao identificado' }}</strong></td>
+                            <td class="muted">{{ notificacao.file_name }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            Nenhum codigo de recuperacao foi encontrado na caixa local.
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

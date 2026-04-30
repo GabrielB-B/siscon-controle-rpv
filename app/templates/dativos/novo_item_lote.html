@@ -18,7 +18,7 @@
 <div class="section-card content-card-narrow">
     <form method="POST">
         {{ csrf_input() }}
-        <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente" value="{{ form_data.get('confirmar_processo_existente', '0') }}">
+        <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente" value="0">
 
         <div class="form-group">
             <label for="nome_beneficiario">Nome</label>
@@ -38,6 +38,11 @@
         <div class="form-group">
             <label for="valor_bruto">Valor bruto</label>
             <input type="text" id="valor_bruto" name="valor_bruto" value="{{ form_data.get('valor_bruto', '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="observacoes">Observacoes</label>
+            <textarea id="observacoes" name="observacoes">{{ form_data.get('observacoes', '') }}</textarea>
         </div>
 
         {% if ocorrencias_processo %}
@@ -82,7 +87,7 @@
                 <button
                     type="submit"
                     class="btn"
-                    onclick="document.getElementById('confirmar_processo_existente').value='1';"
+                    onclick="document.getElementById('confirmar_processo_existente').value='1'; return confirm('Tem certeza que deseja continuar mesmo com possibilidade de processo repetido?');"
                 >
                     Confirmar e continuar mesmo assim
                 </button>

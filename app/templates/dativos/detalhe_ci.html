@@ -100,10 +100,10 @@
 <div class="section-card content-top-18">
     <div class="page-header page-header-inline">
         <div>
-            <h2 class="section-card-title">Previa da planilha unica</h2>
+            <h2 class="section-card-title">{{ importacao_unica_preview.titulo_preview or 'Previa da planilha unica' }}</h2>
             <p class="muted">
                 Arquivo analisado: <strong>{{ importacao_unica_preview.nome_arquivo or 'planilha.ods' }}</strong>.
-                Revise a classificacao automatica e confirme apenas o que deve entrar agora.
+                {{ importacao_unica_preview.descricao_preview or 'Revise a classificacao automatica e confirme apenas o que deve entrar agora.' }}
             </p>
         </div>
         <div class="page-actions">
@@ -132,10 +132,12 @@
             <strong>Rodapes ignorados</strong><br>
             {{ importacao_unica_preview.resumo.rodapes_ignorados }}
         </div>
+        {% if importacao_unica_preview.modo_importacao == 'unico' %}
         <div class="readonly-box">
             <strong>CNPJ mantido em sem IRRF</strong><br>
             {{ importacao_unica_preview.resumo.cnpjs_mantidos_sem_irrf }}
         </div>
+        {% endif %}
     </div>
 
     {% if importacao_unica_preview.prontas_sem_irrf %}
@@ -219,7 +221,7 @@
     {% endif %}
 
     {% if importacao_unica_preview.pendencias %}
-    <form method="POST" action="{{ url_for('dativos.confirmar_importacao_unica', ci_id=dativo_ci.id) }}" class="content-top-18">
+    <form method="POST" action="{{ url_for('dativos.confirmar_importacao_unica', ci_id=dativo_ci.id) }}" class="content-top-18" onsubmit="return confirm('Tem certeza que deseja importar as linhas marcadas, mesmo com possibilidade de repeticao?');">
         {{ csrf_input() }}
         <input type="hidden" name="preview_token" value="{{ importacao_unica_preview.preview_token }}">
 
@@ -363,7 +365,7 @@
                 <h3>Adicionar manualmente ao lote sem IRRF</h3>
                 <form method="POST" action="{{ url_for('dativos.adicionar_item_sem_irrf', ci_id=dativo_ci.id) }}">
                     {{ csrf_input() }}
-                    <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente_sem" value="{{ form_data.get('confirmar_processo_existente', '0') if formulario_origem == 'sem_irrf' else '0' }}">
+                    <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente_sem" value="0">
                     <div class="form-group">
                         <label for="nome_beneficiario_sem">Nome</label>
                         <input type="text" id="nome_beneficiario_sem" name="nome_beneficiario" value="{{ form_data.get('nome_beneficiario', '') if formulario_origem == 'sem_irrf' else '' }}" required>
@@ -382,6 +384,11 @@
                     <div class="form-group">
                         <label for="valor_bruto_sem">Valor bruto</label>
                         <input type="text" id="valor_bruto_sem" name="valor_bruto" value="{{ form_data.get('valor_bruto', '') if formulario_origem == 'sem_irrf' else '' }}" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="observacoes_sem">Observacoes</label>
+                        <textarea id="observacoes_sem" name="observacoes">{{ form_data.get('observacoes', '') if formulario_origem == 'sem_irrf' else '' }}</textarea>
                     </div>
 
                     <button type="submit">Adicionar manualmente ao lote sem IRRF</button>
@@ -430,7 +437,7 @@
                             <button
                                 type="submit"
                                 class="btn"
-                                onclick="document.getElementById('confirmar_processo_existente_sem').value='1';"
+                                onclick="document.getElementById('confirmar_processo_existente_sem').value='1'; return confirm('Tem certeza que deseja continuar mesmo com possibilidade de processo repetido?');"
                             >
                                 Confirmar e continuar mesmo assim
                             </button>
@@ -444,7 +451,7 @@
                 <h3>Adicionar manualmente com IRRF</h3>
                 <form method="POST" action="{{ url_for('dativos.adicionar_item_com_irrf', ci_id=dativo_ci.id) }}" data-irrf-calculator data-irrf-calc-url="{{ url_for('dativos.calcular_irrf_sugerido') }}">
                     {{ csrf_input() }}
-                    <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente_com" value="{{ form_data.get('confirmar_processo_existente', '0') if formulario_origem == 'com_irrf' else '0' }}">
+                    <input type="hidden" name="confirmar_processo_existente" id="confirmar_processo_existente_com" value="0">
                     <input type="hidden" value="{{ dativo_ci.exercicio }}" data-irrf-input="competencia">
                     <div class="form-group">
                         <label for="nome_beneficiario_com">Nome</label>
@@ -469,6 +476,11 @@
                     <div class="form-group">
                         <label for="valor_irrf_com">Valor IRRF (opcional nesta fase)</label>
                         <input type="text" id="valor_irrf_com" name="valor_irrf" value="{{ form_data.get('valor_irrf', '') if formulario_origem == 'com_irrf' else '' }}" data-irrf-input="valor_irrf">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="observacoes_com">Observacoes</label>
+                        <textarea id="observacoes_com" name="observacoes">{{ form_data.get('observacoes', '') if formulario_origem == 'com_irrf' else '' }}</textarea>
                     </div>
 
                     <div class="hint-box">
@@ -530,7 +542,7 @@
                             <button
                                 type="submit"
                                 class="btn"
-                                onclick="document.getElementById('confirmar_processo_existente_com').value='1';"
+                                onclick="document.getElementById('confirmar_processo_existente_com').value='1'; return confirm('Tem certeza que deseja continuar mesmo com possibilidade de processo repetido?');"
                             >
                                 Confirmar e continuar mesmo assim
                             </button>

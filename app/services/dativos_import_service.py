@@ -539,6 +539,12 @@ class DativosImportService:
                 detalhes_pendencia = []
                 referencias_existentes = []
 
+                if ocorrencias_processo:
+                    motivos_pendencia.append("Processo ja encontrado no sistema")
+                    detalhes_pendencia.append(
+                        "Esse numero de processo ja aparece em outro contexto do sistema e exige confirmacao explicita."
+                    )
+
                 if primeira_linha_mesmo_destino is not None:
                     motivos_pendencia.append("Linha repetida na mesma classificacao")
                     detalhes_pendencia.append(
@@ -610,6 +616,175 @@ class DativosImportService:
                 "rodapes_ignorados": rodapes_ignorados,
                 "processos_com_ocorrencia": processos_com_ocorrencia,
                 "cnpjs_mantidos_sem_irrf": cnpjs_mantidos_sem_irrf,
+                "total_linhas_classificadas": (
+                    len(prontas_sem_irrf) + len(prontas_com_irrf) + len(pendencias)
+                ),
+            },
+            "prontas_sem_irrf": prontas_sem_irrf,
+            "prontas_com_irrf": prontas_com_irrf,
+            "pendencias": pendencias,
+            "erros": erros,
+        }
+
+    @staticmethod
+    def analisar_ods_grupo_fixo(arquivo, dativo_ci, grupo: str) -> dict:
+        if grupo not in {"sem_irrf", "com_irrf"}:
+            raise ValueError("Grupo de importacao invalido.")
+
+        df = pd.read_excel(arquivo, engine="odf", dtype=str)
+        mapeamento = DativosImportService._mapear_colunas(df.columns)
+        DativosImportService._validar_mapeamento_com_amostra(df, mapeamento)
+
+        itens_existentes = DativosImportService._carregar_itens_existentes_ci(dativo_ci.id)
+        itens_existentes_por_grupo = {}
+        itens_existentes_por_chave = {}
+
+        for item in itens_existentes:
+            chave = (item.cpf_normalizado, item.numero_processo)
+            itens_existentes_por_chave.setdefault(chave, []).append(item)
+            itens_existentes_por_grupo.setdefault(
+                (item.grupo, item.cpf_normalizado, item.numero_processo),
+                item,
+            )
+
+        prontas_sem_irrf = []
+        prontas_com_irrf = []
+        pendencias = []
+        erros = []
+        rodapes_ignorados = 0
+        processos_com_ocorrencia = 0
+        chaves_vistas_por_grupo = {}
+
+        destino_label = DativosImportService._label_grupo(grupo)
+        regra_aplicada = (
+            "Importacao mantida manualmente no lote sem IRRF."
+            if grupo == "sem_irrf"
+            else "Importacao mantida manualmente no fluxo com IRRF."
+        )
+
+        for indice, row in df.iterrows():
+            linha_excel = indice + 2
+
+            try:
+                nome_bruto = DativosImportService._texto_limpo(row[mapeamento["nome"]])
+                documento_bruto = DativosImportService._texto_limpo(row[mapeamento["documento"]])
+                processo_bruto = DativosImportService._texto_limpo(row[mapeamento["processo"]])
+                valor_bruto_raw = DativosImportService._texto_limpo(row[mapeamento["valor"]])
+
+                if DativosImportService._linha_rodape_ou_total(
+                    nome=nome_bruto,
+                    documento=documento_bruto,
+                    processo=processo_bruto,
+                    valor=valor_bruto_raw,
+                ):
+                    rodapes_ignorados += 1
+                    continue
+
+                nome = nome_bruto
+                documento = DativosImportService._normalizar_documento_generico(documento_bruto)
+                processo = DativosImportService._normalizar_processo(processo_bruto)
+                valor = DativosImportService._normalizar_valor_decimal(valor_bruto_raw)
+
+                if not nome or not processo:
+                    raise ValueError("Nome ou processo em branco.")
+
+                tipo_documento = detectar_tipo_documento(documento)
+                chave = (documento, processo)
+                chave_destino = (grupo, documento, processo)
+                primeira_linha_mesmo_destino = chaves_vistas_por_grupo.get(chave_destino)
+
+                item_existente_mesmo_destino = itens_existentes_por_grupo.get(chave_destino)
+                itens_existentes_outro_grupo = [
+                    item
+                    for item in itens_existentes_por_chave.get(chave, [])
+                    if item.grupo != grupo
+                ]
+
+                ocorrencias_processo = ProcessoCrosscheckService.buscar_ocorrencias(processo)
+                if ocorrencias_processo:
+                    processos_com_ocorrencia += 1
+
+                motivos_pendencia = []
+                detalhes_pendencia = []
+                referencias_existentes = []
+
+                if ocorrencias_processo:
+                    motivos_pendencia.append("Processo ja encontrado no sistema")
+                    detalhes_pendencia.append(
+                        "Esse numero de processo ja aparece em outro contexto do sistema e exige confirmacao explicita."
+                    )
+
+                if primeira_linha_mesmo_destino is not None:
+                    motivos_pendencia.append("Linha repetida na mesma importacao")
+                    detalhes_pendencia.append(
+                        f"Repete documento e processo da linha {primeira_linha_mesmo_destino} neste mesmo fluxo."
+                    )
+
+                if item_existente_mesmo_destino is not None:
+                    motivos_pendencia.append("Ja existe registro igual neste fluxo da C.I.")
+                    detalhes_pendencia.append(
+                        "O mesmo documento e processo ja existem nesse fluxo desta C.I."
+                    )
+                    referencias_existentes.append(
+                        DativosImportService._resumo_item_existente(item_existente_mesmo_destino)
+                    )
+
+                if itens_existentes_outro_grupo:
+                    motivos_pendencia.append("Ja existe no outro fluxo desta C.I.")
+                    detalhes_pendencia.append(
+                        "O mesmo documento e processo ja aparecem no outro grupo desta C.I.; confirme antes de repetir."
+                    )
+                    for item_existente in itens_existentes_outro_grupo[:3]:
+                        referencias_existentes.append(
+                            DativosImportService._resumo_item_existente(item_existente)
+                        )
+
+                linha_preview = {
+                    "preview_id": uuid4().hex,
+                    "line_number": linha_excel,
+                    "nome": nome,
+                    "documento": documento,
+                    "documento_formatado": formatar_documento_br(documento, tipo_documento),
+                    "tipo_documento": tipo_documento,
+                    "processo": processo,
+                    "valor": str(valor),
+                    "valor_legivel": DativosImportService._formatar_decimal_ptbr(valor),
+                    "destino_grupo": grupo,
+                    "destino_label": destino_label,
+                    "regra_aplicada": regra_aplicada,
+                    "motivo_pendencia": " | ".join(motivos_pendencia),
+                    "detalhe_pendencia": " ".join(detalhes_pendencia),
+                    "requer_confirmacao": bool(motivos_pendencia),
+                    "ocorrencias_processo_total": len(ocorrencias_processo),
+                    "ocorrencias_processo": DativosImportService._resumo_ocorrencias_processo(
+                        ocorrencias_processo
+                    ),
+                    "referencias_existentes": referencias_existentes,
+                }
+
+                chaves_vistas_por_grupo.setdefault(chave_destino, linha_excel)
+
+                if linha_preview["requer_confirmacao"]:
+                    pendencias.append(linha_preview)
+                    continue
+
+                if grupo == "sem_irrf":
+                    prontas_sem_irrf.append(linha_preview)
+                else:
+                    prontas_com_irrf.append(linha_preview)
+
+            except Exception as exc:
+                erros.append(f"Linha {linha_excel}: {exc}")
+
+        return {
+            "resumo": {
+                "total_prontas_sem_irrf": len(prontas_sem_irrf),
+                "total_prontas_com_irrf": len(prontas_com_irrf),
+                "total_pendencias": len(pendencias),
+                "total_erros": len(erros),
+                "rodapes_ignorados": rodapes_ignorados,
+                "processos_com_ocorrencia": processos_com_ocorrencia,
+                "cnpjs_mantidos_sem_irrf": 0,
                 "total_linhas_classificadas": (
                     len(prontas_sem_irrf) + len(prontas_com_irrf) + len(pendencias)
                 ),

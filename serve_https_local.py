@@ -28,7 +28,7 @@ app.config["PREFERRED_URL_SCHEME"] = "https"
 
 if __name__ == "__main__":
     host = str(os.getenv("APP_HOST", "0.0.0.0")).strip() or "0.0.0.0"
-    port = _env_int("APP_PORT", 8445)
+    port = _env_int("APP_PORT", 8443)
     cert_file = _env_path("HTTPS_CERT_FILE", "instance/certs/controle_rpv_local.crt")
     key_file = _env_path("HTTPS_KEY_FILE", "instance/certs/controle_rpv_local.key")
 

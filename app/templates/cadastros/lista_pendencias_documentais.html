@@ -26,9 +26,7 @@
                 <label for="responsavel">Fila</label>
                 <select id="responsavel" name="responsavel">
                     <option value="meus" {% if filtro_responsavel == 'meus' %}selected{% endif %}>Meus cadastros e responsabilidades</option>
-                    <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>
-                        {% if current_user.is_admin %}Todos{% else %}Todos os meus{% endif %}
-                    </option>
+                    <option value="todos" {% if filtro_responsavel == 'todos' %}selected{% endif %}>Todos</option>
                     {% for usuario in usuarios %}
                         <option value="{{ usuario.id }}" {% if filtro_responsavel == usuario.id|string %}selected{% endif %}>
                             {{ usuario.nome }}

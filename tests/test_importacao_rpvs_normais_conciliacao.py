@@ -71,9 +71,9 @@ class ImportacaoRPVsNormaisConciliacaoTestCase(unittest.TestCase):
 
     def _seed_base(self):
         user_marina = User(
-            nome="Operador D",
-            login="operador.d",
-            email="operador.d@controle-rpv.local",
+            nome="Marina Bastos",
+            login="marina",
+            email="marina@controle-rpv.local",
             ativo=True,
             is_admin=True,
         )
@@ -223,7 +223,7 @@ class ImportacaoRPVsNormaisConciliacaoTestCase(unittest.TestCase):
         registro = self._criar_registro_existente(
             processo_edoc="1549/2026",
             numero_processo="202540906027",
-            nome_beneficiario="BENEFICIARIO TESTE",
+            nome_beneficiario="GUILHERME SOBRAL SANTOS",
             documento="90560477520",
         )
 
@@ -231,10 +231,10 @@ class ImportacaoRPVsNormaisConciliacaoTestCase(unittest.TestCase):
             [
                 [
                     date(2026, 3, 1),
-                    "Operador D",
+                    "Marina",
                     "RPV-HONORARIOS",
                     "1549/2026",
-                    "BENEFICIARIO TESTE",
+                    "GUILHERME SOBRAL SANTOS",
                     "90560477520",
                     "202540906027",
                     date(2026, 3, 24),
@@ -271,7 +271,7 @@ class ImportacaoRPVsNormaisConciliacaoTestCase(unittest.TestCase):
         self.assertEqual(atualizado.processo.processo_edoc, "1549/2026")
         self.assertEqual(atualizado.processo.numero_processo, "202540906027")
         self.assertEqual(atualizado.processo.exercicio, "2026-03")
-        self.assertEqual(atualizado.nome_beneficiario, "BENEFICIARIO TESTE")
+        self.assertEqual(atualizado.nome_beneficiario, "GUILHERME SOBRAL SANTOS")
         self.assertEqual(atualizado.documento_original, "90560477520")
         self.assertEqual(Decimal(atualizado.valor_bruto), Decimal("5859.14"))
         self.assertEqual(Decimal(atualizado.valor_irrf), Decimal("337.05"))
@@ -289,7 +289,7 @@ class ImportacaoRPVsNormaisConciliacaoTestCase(unittest.TestCase):
         self._criar_registro_existente(
             processo_edoc="1548/2026",
             numero_processo="202540906995",
-            nome_beneficiario="BENEFICIARIO TESTE",
+            nome_beneficiario="GUILHERME SOBRAL SANTOS",
             documento="90560477520",
             nota_empenho="NE 123",
         )
@@ -298,10 +298,10 @@ class ImportacaoRPVsNormaisConciliacaoTestCase(unittest.TestCase):
             [
                 [
                     date(2026, 3, 1),
-                    "Operador D",
+                    "Marina",
                     "RPV-HONORARIOS",
                     "1548/2026",
-                    "BENEFICIARIO TESTE",
+                    "GUILHERME SOBRAL SANTOS",
                     "90560477520",
                     "202540906995",
                     date(2026, 3, 24),

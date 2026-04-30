@@ -3,15 +3,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from io import StringIO
 
-from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
+from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 from unidecode import unidecode
 
 from app.extensions import db
-from app.models import DativoCI, DativoItem, RegistroRPV, User
+from app.models import DativoCI, DativoItem, Processo, RegistroRPV, User
 from app.services.audit_service import registrar_evento, snapshot_entidade
 from app.utils.formatters import formatar_documento_br
+from app.utils.navigation import current_internal_url, sanitize_internal_return_url
 from app.utils.normalizers import normalizar_documento
 from app.utils.reinf_rules import (
     REINF_STATUS_NAO_ENVIADO,
@@ -57,6 +59,10 @@ REINF_VISOES = {
 }
 REINF_ORDENACAO_PADRAO = "beneficiario"
 REINF_DIRECAO_PADRAO = "asc"
+
+
+def _url_retorno_interna(padrao: str) -> str:
+    return sanitize_internal_return_url(request.values.get("retorno"), padrao)
 
 
 def _competencia_mes_atual() -> str:
@@ -161,6 +167,40 @@ def _ano_valido(valor: str | None, padrao: str) -> str:
     return padrao
 
 
+def _inicio_competencia(competencia: str | None) -> date | None:
+    valor = _competencia_normalizada(competencia)
+    if not valor:
+        return None
+
+    ano, mes = valor.split("-", 1)
+    try:
+        return date(int(ano), int(mes), 1)
+    except ValueError:
+        return None
+
+
+def _proximo_mes(valor: date) -> date:
+    if valor.month == 12:
+        return date(valor.year + 1, 1, 1)
+    return date(valor.year, valor.month + 1, 1)
+
+
+def _faixa_competencia(competencia: str | None) -> tuple[date | None, date | None]:
+    inicio = _inicio_competencia(competencia)
+    if not inicio:
+        return None, None
+    return inicio, _proximo_mes(inicio)
+
+
+def _faixa_ano(ano: str | None) -> tuple[date | None, date | None]:
+    valor = str(ano or "").strip()
+    if len(valor) != 4 or not valor.isdigit():
+        return None, None
+
+    inicio = date(int(valor), 1, 1)
+    return inicio, date(int(valor) + 1, 1, 1)
+
+
 def _chave_ordenacao_registro(registro: dict) -> tuple[date, Decimal, datetime]:
     return (
         registro.get("data_pagamento") or _competencia_para_data_base(registro.get("competencia_valor")),
@@ -263,6 +303,153 @@ def _filtro_busca_ok(registro: dict, busca: str, busca_doc: str) -> bool:
     return False
 
 
+def _aplicar_filtro_data_pagamento(query, coluna_data, *, competencia: str | None, ano: str | None):
+    inicio_competencia, fim_competencia = _faixa_competencia(competencia)
+    if inicio_competencia and fim_competencia:
+        query = query.filter(coluna_data >= inicio_competencia, coluna_data < fim_competencia)
+
+    inicio_ano, fim_ano = _faixa_ano(ano)
+    if inicio_ano and fim_ano:
+        query = query.filter(coluna_data >= inicio_ano, coluna_data < fim_ano)
+
+    return query
+
+
+def _query_rpvs_reinf(
+    *,
+    competencia: str | None,
+    filtro_responsavel: str,
+    filtro_busca: str,
+    ano: str | None,
+):
+    busca_bruta = str(filtro_busca or "").strip()
+    busca = _normalizar_texto(filtro_busca)
+    busca_doc = normalizar_documento(filtro_busca)
+
+    query = (
+        RegistroRPV.query.options(
+            joinedload(RegistroRPV.elaborador),
+            joinedload(RegistroRPV.processo),
+            joinedload(RegistroRPV.situacao_imposto),
+            joinedload(RegistroRPV.situacao_empenho),
+        )
+        .filter(RegistroRPV.ativo.is_(True), RegistroRPV.sem_irrf.is_(False))
+        .order_by(RegistroRPV.criado_em.desc())
+    )
+
+    if filtro_responsavel not in ("", "todos", "meus"):
+        query = query.filter(RegistroRPV.elaborador_id == filtro_responsavel)
+
+    query = _aplicar_filtro_data_pagamento(
+        query,
+        RegistroRPV.data_pagamento,
+        competencia=competencia,
+        ano=ano,
+    )
+
+    if busca or busca_doc:
+        query = query.join(RegistroRPV.processo)
+        filtros_busca = []
+        if busca:
+            filtros_busca.extend(
+                [
+                    RegistroRPV.nome_beneficiario_normalizado.contains(busca),
+                    Processo.numero_processo.ilike(f"%{busca_bruta}%"),
+                    Processo.processo_edoc.ilike(f"%{busca_bruta}%"),
+                    RegistroRPV.historico_auto.ilike(f"%{busca_bruta}%"),
+                ]
+            )
+        if busca_doc:
+            filtros_busca.append(RegistroRPV.documento_normalizado.contains(busca_doc))
+        query = query.filter(or_(*filtros_busca))
+
+    return query
+
+
+def _query_dativos_reinf(
+    *,
+    competencia: str | None,
+    filtro_responsavel: str,
+    filtro_busca: str,
+    ano: str | None,
+):
+    busca_bruta = str(filtro_busca or "").strip()
+    busca = _normalizar_texto(filtro_busca)
+    busca_doc = normalizar_documento(filtro_busca)
+
+    query = (
+        DativoItem.query.options(
+            joinedload(DativoItem.dativo_ci).joinedload(DativoCI.responsavel),
+            joinedload(DativoItem.situacao_rpv),
+        )
+        .filter(DativoItem.grupo == "com_irrf", DativoItem.ativo.is_(True))
+        .order_by(DativoItem.criado_em.desc())
+    )
+
+    if filtro_responsavel not in ("", "todos", "meus"):
+        query = query.join(DativoItem.dativo_ci).filter(DativoCI.responsavel_id == filtro_responsavel)
+
+    query = _aplicar_filtro_data_pagamento(
+        query,
+        DativoItem.data_pagamento,
+        competencia=competencia,
+        ano=ano,
+    )
+
+    if busca or busca_doc:
+        if filtro_responsavel in ("", "todos", "meus"):
+            query = query.join(DativoItem.dativo_ci)
+        filtros_busca = []
+        if busca:
+            filtros_busca.extend(
+                [
+                    DativoItem.nome_beneficiario_normalizado.contains(busca),
+                    DativoItem.numero_processo.ilike(f"%{busca_bruta}%"),
+                    DativoCI.processo_edoc.ilike(f"%{busca_bruta}%"),
+                    DativoItem.resumo_operacional.ilike(f"%{busca_bruta}%"),
+                ]
+            )
+        if busca_doc:
+            filtros_busca.append(DativoItem.cpf_normalizado.contains(busca_doc))
+        query = query.filter(or_(*filtros_busca))
+
+    return query
+
+
+def _anos_disponiveis_reinf(filtro_responsavel: str, filtro_busca: str) -> list[str]:
+    anos = set()
+
+    rpvs = (
+        _query_rpvs_reinf(
+            competencia=None,
+            filtro_responsavel=filtro_responsavel,
+            filtro_busca=filtro_busca,
+            ano=None,
+        )
+        .with_entities(RegistroRPV.data_pagamento)
+        .all()
+    )
+    for (data_pagamento,) in rpvs:
+        if data_pagamento:
+            anos.add(data_pagamento.strftime("%Y"))
+
+    itens = (
+        _query_dativos_reinf(
+            competencia=None,
+            filtro_responsavel=filtro_responsavel,
+            filtro_busca=filtro_busca,
+            ano=None,
+        )
+        .with_entities(DativoItem.data_pagamento)
+        .all()
+    )
+    for (data_pagamento,) in itens:
+        if data_pagamento:
+            anos.add(data_pagamento.strftime("%Y"))
+
+    return sorted(anos, reverse=True)
+
+
 def _registro_pago_no_mes(data_pagamento, competencia: str) -> bool:
     return bool(data_pagamento and data_pagamento.strftime("%Y-%m") == competencia)
 
@@ -275,8 +462,11 @@ def _competencias_reinf_pendentes() -> list[str]:
     competencias = set()
 
     rpvs = (
-        RegistroRPV.query.options(joinedload(RegistroRPV.situacao_imposto))
-        .filter_by(ativo=True)
+        RegistroRPV.query.options(
+            joinedload(RegistroRPV.situacao_imposto),
+            joinedload(RegistroRPV.situacao_empenho),
+        )
+        .filter(RegistroRPV.ativo.is_(True), RegistroRPV.data_pagamento.isnot(None))
         .all()
     )
     for registro in rpvs:
@@ -290,7 +480,15 @@ def _competencias_reinf_pendentes() -> list[str]:
             continue
         competencias.add(registro.data_pagamento.strftime("%Y-%m"))
 
-    itens_irrf = DativoItem.query.filter_by(grupo="com_irrf", ativo=True).all()
+    itens_irrf = (
+        DativoItem.query.options(joinedload(DativoItem.situacao_rpv))
+        .filter(
+            DativoItem.grupo == "com_irrf",
+            DativoItem.ativo.is_(True),
+            DativoItem.data_pagamento.isnot(None),
+        )
+        .all()
+    )
     for item in itens_irrf:
         if getattr(item, "status_principal_cancelado", False):
             continue
@@ -332,7 +530,7 @@ def _resolver_competencia_reinf_livre(valor_solicitado: str | None) -> dict:
     }
 
 
-def _montar_registro_rpv(registro: RegistroRPV) -> dict:
+def _montar_registro_rpv(registro: RegistroRPV, *, retorno_url: str | None = None) -> dict:
     processo = getattr(registro, "processo", None)
     documento_original = registro.documento_original or "-"
     tipo_documento = str(getattr(registro, "tipo_documento_efetivo", "") or "CPF").upper()
@@ -341,6 +539,9 @@ def _montar_registro_rpv(registro: RegistroRPV) -> dict:
         if registro.data_pagamento
         else ""
     )
+    abrir_url = url_for("cadastros.editar_rpv", registro_id=registro.id)
+    if retorno_url:
+        abrir_url = url_for("cadastros.editar_rpv", registro_id=registro.id, retorno=retorno_url)
     return {
         "origem": "rpv",
         "tipo_origem": "RPV normal",
@@ -362,13 +563,13 @@ def _montar_registro_rpv(registro: RegistroRPV) -> dict:
         "imposto": registro.valor_irrf or 0,
         "valor_liquido": _decimal(registro.valor_bruto) - _decimal(registro.valor_irrf),
         "reinf_status": registro.reinf_status_legivel,
-        "abrir_url": url_for("cadastros.editar_rpv", registro_id=registro.id),
+        "abrir_url": abrir_url,
         "registro_id": registro.id,
         "criado_em": registro.criado_em,
     }
 
 
-def _montar_registro_dativo(item: DativoItem) -> dict:
+def _montar_registro_dativo(item: DativoItem, *, retorno_url: str | None = None) -> dict:
     dativo_ci = getattr(item, "dativo_ci", None)
     documento_original = item.cpf_original or "-"
     tipo_documento = str(getattr(item, "tipo_documento_efetivo", "") or "CPF").upper()
@@ -377,6 +578,9 @@ def _montar_registro_dativo(item: DativoItem) -> dict:
         if item.data_pagamento
         else ""
     )
+    abrir_url = url_for("dativos.detalhe_item_com_irrf", item_id=item.id)
+    if retorno_url:
+        abrir_url = url_for("dativos.detalhe_item_com_irrf", item_id=item.id, retorno=retorno_url)
     return {
         "origem": "dativo_item",
         "tipo_origem": "Dativo com IRRF",
@@ -402,7 +606,7 @@ def _montar_registro_dativo(item: DativoItem) -> dict:
         "imposto": item.valor_irrf or 0,
         "valor_liquido": _decimal(item.valor_bruto) - _decimal(item.valor_irrf),
         "reinf_status": item.reinf_status_legivel,
-        "abrir_url": url_for("dativos.detalhe_item_com_irrf", item_id=item.id),
+        "abrir_url": abrir_url,
         "registro_id": item.id,
         "criado_em": item.criado_em,
     }
@@ -414,21 +618,18 @@ def _coletar_base_reinf(
     filtro_busca: str,
     *,
     ano: str | None = None,
+    retorno_url: str | None = None,
 ) -> list[dict]:
     busca = _normalizar_texto(filtro_busca)
     busca_doc = normalizar_documento(filtro_busca)
     registros = []
 
-    rpvs = (
-        RegistroRPV.query.options(
-            joinedload(RegistroRPV.elaborador),
-            joinedload(RegistroRPV.processo),
-            joinedload(RegistroRPV.situacao_imposto),
-        )
-        .filter_by(ativo=True)
-        .order_by(RegistroRPV.criado_em.desc())
-        .all()
-    )
+    rpvs = _query_rpvs_reinf(
+        competencia=competencia,
+        filtro_responsavel=filtro_responsavel,
+        filtro_busca=filtro_busca,
+        ano=ano,
+    ).all()
     for registro in rpvs:
         if getattr(registro, "status_principal_cancelado", False):
             continue
@@ -443,20 +644,18 @@ def _coletar_base_reinf(
         if not _filtro_responsavel_ok(registro.elaborador_id, filtro_responsavel):
             continue
 
-        linha = _montar_registro_rpv(registro)
+        linha = _montar_registro_rpv(registro, retorno_url=retorno_url)
         if not _filtro_busca_ok(linha, busca, busca_doc):
             continue
 
         registros.append(linha)
 
-    itens_irrf = (
-        DativoItem.query.options(
-            joinedload(DativoItem.dativo_ci).joinedload(DativoCI.responsavel),
-        )
-        .filter_by(grupo="com_irrf", ativo=True)
-        .order_by(DativoItem.criado_em.desc())
-        .all()
-    )
+    itens_irrf = _query_dativos_reinf(
+        competencia=competencia,
+        filtro_responsavel=filtro_responsavel,
+        filtro_busca=filtro_busca,
+        ano=ano,
+    ).all()
     for item in itens_irrf:
         if getattr(item, "status_principal_cancelado", False):
             continue
@@ -468,7 +667,7 @@ def _coletar_base_reinf(
         if not _filtro_responsavel_ok(item.dativo_ci.responsavel_id if item.dativo_ci else None, filtro_responsavel):
             continue
 
-        linha = _montar_registro_dativo(item)
+        linha = _montar_registro_dativo(item, retorno_url=retorno_url)
         if not _filtro_busca_ok(linha, busca, busca_doc):
             continue
 
@@ -724,19 +923,8 @@ def index():
     usuarios = User.query.filter_by(ativo=True).order_by(User.nome.asc()).all()
     filtros = _filtros_reinf()
     visao = filtros["visao"]
-    registros_gerais = _coletar_base_reinf(
-        competencia=None,
-        filtro_responsavel=filtros["responsavel"],
-        filtro_busca=filtros["q"],
-    )
-    anos_disponiveis = sorted(
-        {
-            registro["data_pagamento"].strftime("%Y")
-            for registro in registros_gerais
-            if registro.get("data_pagamento")
-        },
-        reverse=True,
-    )
+    url_retorno_atual = current_internal_url(url_for("reinf.index"))
+    anos_disponiveis = _anos_disponiveis_reinf(filtros["responsavel"], filtros["q"])
     if not anos_disponiveis:
         anos_disponiveis = [filtros["ano"]]
     if filtros["ano"] not in anos_disponiveis:
@@ -792,11 +980,16 @@ def index():
     }
 
     if visao == "operacional":
+        registros_base = _coletar_base_reinf(
+            competencia=filtros["competencia"],
+            filtro_responsavel=filtros["responsavel"],
+            filtro_busca=filtros["q"],
+            retorno_url=url_retorno_atual,
+        )
         registros = [
             registro
-            for registro in registros_gerais
-            if _registro_pago_no_mes(registro["data_pagamento"], filtros["competencia"])
-            and _filtro_status_ok(registro["reinf_status"], filtros["reinf_status"])
+            for registro in registros_base
+            if _filtro_status_ok(registro["reinf_status"], filtros["reinf_status"])
         ]
         registros = _ordenar_registros_reinf(registros, filtros["ordenar"], filtros["direcao"])
         registros_paginados, paginacao = paginate_items(
@@ -870,21 +1063,24 @@ def index():
             direcao=filtros["direcao"],
         )
     elif visao == "conferencia_mensal":
-        registros_mes = [
-            registro
-            for registro in registros_gerais
-            if _registro_pago_no_mes(registro["data_pagamento"], filtros["competencia"])
-        ]
+        registros_mes = _coletar_base_reinf(
+            competencia=filtros["competencia"],
+            filtro_responsavel=filtros["responsavel"],
+            filtro_busca=filtros["q"],
+            retorno_url=url_retorno_atual,
+        )
         conferencia_mensal = _linhas_conferencia_reinf_mensal(
             registros_mes,
             filtros["competencia"],
         )
     else:
-        registros_ano = [
-            registro
-            for registro in registros_gerais
-            if _registro_pago_no_ano(registro["data_pagamento"], filtros["ano"])
-        ]
+        registros_ano = _coletar_base_reinf(
+            competencia=None,
+            filtro_responsavel=filtros["responsavel"],
+            filtro_busca=filtros["q"],
+            ano=filtros["ano"],
+            retorno_url=url_retorno_atual,
+        )
         conferencia_anual = _linhas_conferencia_reinf_anual(
             registros_ano,
             filtros["ano"],
@@ -925,6 +1121,7 @@ def index():
         competencia_bloqueada=filtros["competencia_bloqueada"],
         competencias_pendentes=filtros["competencias_pendentes"],
         competencia_legivel=_competencia_legivel,
+        url_retorno_atual=url_retorno_atual,
     )
 
 
@@ -1009,11 +1206,16 @@ def atualizar_status():
     except ValueError as exc:
         db.session.rollback()
         flash(str(exc), "warning")
-    except Exception as exc:
+    except Exception:
         db.session.rollback()
-        flash(f"Erro ao atualizar status da REINF: {exc}", "danger")
+        current_app.logger.exception(
+            "Falha ao atualizar status da REINF. origem=%s registro_id=%s",
+            origem,
+            registro_id,
+        )
+        flash("Nao foi possivel atualizar o status da REINF agora. Tente novamente.", "danger")
 
-    return redirect(request.referrer or url_for("reinf.index"))
+    return redirect(_url_retorno_interna(url_for("reinf.index")))
 
 
 @reinf_bp.route("/limpar-status", methods=["POST"])
@@ -1021,7 +1223,7 @@ def atualizar_status():
 def limpar_status():
     if not getattr(current_user, "is_admin", False):
         flash("Acesso restrito a administradores.", "danger")
-        return redirect(request.referrer or url_for("reinf.index"))
+        return redirect(_url_retorno_interna(url_for("reinf.index")))
 
     origem = request.form.get("origem", "").strip()
     registro_id = request.form.get("registro_id", "").strip()
@@ -1036,11 +1238,17 @@ def limpar_status():
         )
         db.session.commit()
         flash("Status da REINF limpo com sucesso.", "success")
-    except Exception as exc:
+    except Exception:
         db.session.rollback()
-        flash(f"Erro ao limpar status da REINF: {exc}", "danger")
+        current_app.logger.exception(
+            "Falha ao limpar status da REINF. origem=%s registro_id=%s usuario_id=%s",
+            origem,
+            registro_id,
+            getattr(current_user, "id", None),
+        )
+        flash("Nao foi possivel limpar o status da REINF agora. Tente novamente.", "danger")
 
-    return redirect(request.referrer or url_for("reinf.index"))
+    return redirect(_url_retorno_interna(url_for("reinf.index")))
 
 
 @reinf_bp.route("/atualizar-status-lote", methods=["POST"])
@@ -1054,7 +1262,7 @@ def atualizar_status_lote():
 
     if not selecionados:
         flash("Selecione ao menos um registro para atualizar em lote.", "info")
-        return redirect(request.referrer or url_for("reinf.index"))
+        return redirect(_url_retorno_interna(url_for("reinf.index")))
 
     try:
         reinf_status = _resolver_status_reinf_obrigatorio(
@@ -1078,8 +1286,13 @@ def atualizar_status_lote():
     except ValueError as exc:
         db.session.rollback()
         flash(str(exc), "warning")
-    except Exception as exc:
+    except Exception:
         db.session.rollback()
-        flash(f"Erro ao atualizar a REINF em lote: {exc}", "danger")
+        current_app.logger.exception(
+            "Falha ao atualizar a REINF em lote. total_selecionados=%s usuario_id=%s",
+            len(selecionados),
+            getattr(current_user, "id", None),
+        )
+        flash("Nao foi possivel atualizar a REINF em lote agora. Tente novamente.", "danger")
 
-    return redirect(request.referrer or url_for("reinf.index"))
+    return redirect(_url_retorno_interna(url_for("reinf.index")))

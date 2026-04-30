@@ -51,7 +51,7 @@ class ImportacaoRPVsNormaisTestCase(unittest.TestCase):
             [
                 [
                     datetime(2026, 2, 1),
-                    "LE",
+                    "Lê",
                     "RPV-HONORARIOS",
                     "123/2026",
                     "FULANO DE TAL",
@@ -75,7 +75,7 @@ class ImportacaoRPVsNormaisTestCase(unittest.TestCase):
 
         self.assertEqual(len(linhas), 1)
         linha = linhas[0]
-        self.assertEqual(linha.elaborador_destino, "Operador C")
+        self.assertEqual(linha.elaborador_destino, "Adeildes Conceição Cruz")
         self.assertEqual(linha.documento_ajustado, "09994377710")
         self.assertEqual(linha.tipo_documento, "CPF")
         self.assertEqual(linha.reinf_destino, "Concluído")
@@ -88,7 +88,7 @@ class ImportacaoRPVsNormaisTestCase(unittest.TestCase):
             [
                 [
                     datetime(2026, 3, 1),
-                    "Operador B",
+                    "Leonardo",
                     "RPV_CUSTEIO",
                     "1072/2026",
                     "EMPRESA TESTE LTDA",
@@ -122,7 +122,7 @@ class ImportacaoRPVsNormaisTestCase(unittest.TestCase):
             [
                 [
                     datetime(2026, 3, 1),
-                    "Operador A",
+                    "Gabriel",
                     "RPV-PESSOAL",
                     "500/2026",
                     "PESSOA INVALIDA",
@@ -154,7 +154,7 @@ class ImportacaoRPVsNormaisTestCase(unittest.TestCase):
             [
                 [
                     datetime(2026, 4, 1),
-                    "Operador A",
+                    "Gabriel",
                     "RPV-DANOS MORAIS",
                     "201/2026",
                     "PESSOA TESTE",
@@ -182,12 +182,107 @@ class ImportacaoRPVsNormaisTestCase(unittest.TestCase):
         self.assertFalse(any("DANOS MORAIS" in issue.upper() for issue in linha.issues))
         self.assertFalse(linha.issues)
 
+    def test_mapeia_aliases_retroativos_de_tipo_e_status_vd(self):
+        path = self._criar_planilha(
+            [
+                [
+                    datetime(2026, 4, 1),
+                    "Marina",
+                    "TRABALHISTA",
+                    "1770/2026",
+                    "PESSOA TRABALHISTA",
+                    "52998224725",
+                    "202640900101",
+                    datetime(2026, 4, 7),
+                    4994.54,
+                    "S/IF",
+                    "NE 567",
+                    "VD  \u00c0 LIQUIDAR",
+                    "SEM IRRF",
+                    None,
+                    None,
+                    "-",
+                    None,
+                ],
+                [
+                    datetime(2026, 4, 1),
+                    "Marina",
+                    "PERICIAL",
+                    "1831/2026",
+                    "PESSOA PERICIAL",
+                    "28001238938",
+                    "202640900102",
+                    datetime(2026, 4, 9),
+                    14700,
+                    2966.79,
+                    "NE 571",
+                    "VD  \u00c0 LIQUIDAR",
+                    "AGUARDANDO PGTO OB PRINCIPAL",
+                    None,
+                    None,
+                    "-",
+                    None,
+                ],
+                [
+                    datetime(2026, 4, 1),
+                    "Marina",
+                    "INDENIZA\u00c7\u00c3O",
+                    "1913/2026",
+                    "PESSOA INDENIZACAO",
+                    "39053344705",
+                    "202640900103",
+                    datetime(2026, 4, 14),
+                    8475.55,
+                    "S/IF",
+                    "SE 631",
+                    "SE AGUARDANDO APROVA\u00c7\u00c3O",
+                    "SEM IRRF",
+                    None,
+                    None,
+                    "-",
+                    None,
+                ],
+                [
+                    datetime(2026, 4, 1),
+                    "Marina",
+                    "HONOR\u00c1RIOS",
+                    "1944/2026",
+                    "PESSOA HONORARIOS",
+                    "03.263.975/0001-09",
+                    "202640900104",
+                    datetime(2026, 4, 15),
+                    3118.5,
+                    "S/IF",
+                    "SE 642",
+                    "VD    LIQUIDADA",
+                    "SEM IRRF",
+                    None,
+                    None,
+                    "-",
+                    None,
+                ],
+            ]
+        )
+
+        linhas = carregar_planilha_rpvs_normais(path)
+
+        self.assertEqual([linha.tipo_rpv_destino for linha in linhas], [
+            "RPV trabalhista",
+            "RPV periciais",
+            "Indeniza\u00e7\u00e3o",
+            "RPV honor\u00e1rios",
+        ])
+        self.assertEqual(linhas[0].situacao_empenho_destino, "VD \u00e0 Liquidar")
+        self.assertEqual(linhas[1].situacao_empenho_destino, "VD \u00e0 Liquidar")
+        self.assertEqual(linhas[3].situacao_empenho_destino, "VD Liquidada")
+        self.assertTrue(all(not linha.issues for linha in linhas))
+
     def test_bloqueia_todas_as_linhas_de_processo_repetido_na_planilha(self):
         path = self._criar_planilha(
             [
                 [
                     datetime(2026, 2, 1),
-                    "Operador A",
+                    "Gabriel",
                     "RPV-PESSOAL",
                     "101/2026",
                     "PESSOA A",
@@ -206,7 +301,7 @@ class ImportacaoRPVsNormaisTestCase(unittest.TestCase):
                 ],
                 [
                     datetime(2026, 2, 1),
-                    "Operador D",
+                    "Marina",
                     "RPV-PESSOAL",
                     "102/2026",
                     "PESSOA B",

@@ -167,6 +167,7 @@ class DativosService:
         numero_processo: str,
         valor_bruto,
         usuario_id: int,
+        observacoes: str | None = None,
         permitir_duplicidade_confirmada: bool = False,
     ) -> DativoItem:
         DativosService._verificar_duplicidade_item(
@@ -201,7 +202,7 @@ class DativosService:
             situacao_rpv_id=lote.situacao_rpv_id,
             situacao_imposto_id=lote.situacao_imposto_id,
             resumo_operacional="",
-            observacoes=None,
+            observacoes=observacoes or None,
             ativo=True,
             criado_por_id=usuario_id,
             atualizado_por_id=usuario_id,
@@ -231,6 +232,7 @@ class DativosService:
         valor_bruto,
         valor_irrf,
         usuario_id: int,
+        observacoes: str | None = None,
         permitir_duplicidade_confirmada: bool = False,
     ) -> DativoItem:
         DativosService._verificar_duplicidade_item(
@@ -262,7 +264,7 @@ class DativosService:
             situacao_rpv_id=DativosService.obter_situacao_rpv_inicial().id,
             situacao_imposto_id=DativosService.obter_situacao_imposto_sem_tratamento().id,
             resumo_operacional="",
-            observacoes=None,
+            observacoes=observacoes or None,
             ativo=True,
             criado_por_id=usuario_id,
             atualizado_por_id=usuario_id,
