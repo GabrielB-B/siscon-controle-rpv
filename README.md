@@ -1,64 +1,46 @@
 # SISCON Controle de RPVs
 
-Aplicação web Flask desenvolvida para apoiar um fluxo real de controle financeiro/operacional de RPVs, sigla para Requisições de Pequeno Valor. O sistema organiza requisições individuais, pagamentos agrupados em lotes, pendências documentais, conciliação de importações, conferência REINF e BI operacional.
+Aplicacao web Flask para controle financeiro e operacional de RPVs. O sistema organiza requisicoes individuais, pagamentos em lote, pendencias documentais, conciliacao de importacoes, conferencia REINF e BI operacional.
 
-O projeto nasceu para substituir controles dispersos em planilhas e verificações manuais por um sistema local com rastreabilidade, validação de regras, histórico de alterações e separação segura entre código e dados sensíveis.
-
-Esta versão foi preparada para portfólio público. Ela demonstra arquitetura, regras de negócio e testes automatizados, mas não inclui bancos de dados, planilhas, backups, certificados, arquivos `.env` reais ou documentos internos de operação.
+Esta versao foi preparada para portfolio publico. Ela demonstra arquitetura, regras de negocio, testes e operacao local, mas nao inclui banco real, planilhas, backups, certificados, arquivos `.env` reais ou documentos internos.
 
 ## Contexto
 
-Setores financeiros que lidam com Requisições de Pequeno Valor precisam conferir processos, beneficiários, documentos, valores, imposto retido, status de empenho, ordens bancárias e informações de REINF. No contexto que inspirou este projeto, o fluxo envolve honorários advocatícios pagos pelo Estado, processados em ambiente de Procuradoria-Geral do Estado (PGE), com necessidade de controle preciso sobre pagamentos individuais e pagamentos em lote.
-
-Esses pagamentos podem aparecer como requisições individuais ou como grupos/lotes vinculados a uma comunicação interna do setor. Quando esse fluxo depende apenas de planilhas, aumenta o risco de duplicidade, retrabalho, perda de histórico e alterações sem rastreio.
-
-O sistema organiza esse processo em uma aplicação web local, com foco em segurança operacional e produtividade da equipe.
-
-## Impactos do Projeto
-
-- Centralização do acompanhamento de requisições individuais e pagamentos em lote em uma interface única.
-- Redução de risco operacional por meio de validação de documentos, valores, duplicidades e status.
-- Rastreabilidade de alterações críticas com histórico por usuário, data, hora e campos modificados.
-- Maior segurança para dados sensíveis, mantendo banco, planilhas, backups e segredos fora do Git.
-- Apoio à tomada de decisão com BI operacional, dashboard, filtros e visões de conferência.
-- Padronização de importações com relatórios de pendências antes da entrada definitiva no fluxo.
-- Evolução controlada do banco com migrations e testes automatizados.
+O projeto nasceu para substituir controles dispersos em planilhas e verificacoes manuais por um sistema local com rastreabilidade, validacao de regras, historico de alteracoes e separacao segura entre codigo e dados sensiveis.
 
 ## Destaques
 
-- Cadastro e acompanhamento de Requisições de Pequeno Valor individuais e em lote.
-- Importação assistida de planilhas com validação, pendências e relatórios de saída.
-- Regras fiscais para IRRF, casos sem retenção e conciliação de pagamentos.
-- Auditoria de alterações com histórico por usuário, data, hora e campos alterados.
-- Controle de usuários, perfis, recuperação de senha e troca obrigatória de senha.
-- Dashboard operacional com filtros, indicadores e visões de conferência.
-- Separação entre código, configuração local e dados sensíveis.
-- Suite automatizada com `pytest` cobrindo regras de negócio e fluxos críticos.
+- Controle de RPVs individuais e pagamentos em lote.
+- Importacao assistida com validacao, conciliacao e tratamento de duplicidades.
+- REINF mensal e anual com agrupamento por competencia.
+- BI operacional com filtros, indicadores e visoes de conferencia.
+- Auditoria de alteracoes com snapshots antes/depois.
+- Recuperacao de senha, notificacao local e trocas obrigatorias de senha.
+- Healthcheck operacional, observabilidade basica e trilha local de suporte.
+- Throttling persistente em SQLite para proteger login e recuperacao.
+- Separacao segura entre codigo versionado e dados operacionais.
 
-## Funcionalidades de Negócio
+## Funcionalidades de Negocio
 
-- Controle de RPVs individuais, com processo, beneficiário, documento, valor bruto, IRRF, valor líquido e status de pagamento.
-- Controle de pagamentos em lote, com separação por C.I., lote, item, beneficiário e situação fiscal.
-- BI operacional com indicadores de pagamento, pendências, responsáveis, competências, valores e situações.
-- Conferência REINF mensal e anual para pagamentos com retenção de IRRF.
-- Importação assistida de planilhas com normalização, validação, bloqueio de duplicidades e relatórios de pendências.
-- Gestão de pendências documentais para casos que ainda não podem entrar no fluxo financeiro definitivo.
-- Auditoria de alterações sensíveis, incluindo histórico com usuário, data, hora, ação, antes/depois e resumo do evento.
-- Controle de acesso com usuários, perfis, recuperação de senha, troca obrigatória e proteção CSRF.
-- Edição controlada de valores sensíveis, como valor bruto, sempre com confirmação explícita.
+- Controle de processo, beneficiario, documento, valor bruto, IRRF, valor liquido e status.
+- Controle de C.I., lote e item para pagamentos agrupados.
+- Competencia operacional protegida para BI e REINF, priorizando o mes de pagamento quando houver quitacao.
+- Pendencias documentais para casos ainda nao prontos para o fluxo financeiro.
+- Regras fiscais para IRRF, inclusive cenarios sem retencao.
+- Edicao controlada de campos sensiveis com confirmacao explicita.
+- Auditoria operacional preventiva e healthchecks locais.
 
 ## Habilidades Demonstradas
 
-- Desenvolvimento web backend com Flask, Blueprints e SQLAlchemy.
-- Modelagem de domínio para fluxo financeiro com processos, pagamentos, impostos e pendências.
-- Criação de migrations com Alembic para evolução segura do schema.
-- Implementação de regras de negócio com `Decimal` para valores financeiros.
-- Importação e conciliação de planilhas com validação antes da persistência.
-- Auditoria funcional com snapshots antes/depois de alterações sensíveis.
-- Autenticação, perfis, recuperação de senha, CSRF e proteção de sessões.
-- Organização de testes automatizados cobrindo comportamento fiscal, operacional e web.
-- Scripts PowerShell para execução local em Windows e suporte a HTTPS local.
-- Preparação profissional de repositório público sem exposição de dados reais.
+- Flask com Blueprints e SQLAlchemy.
+- Modelagem de dominio financeiro e operacional.
+- Migrations Alembic para evolucao segura do schema.
+- Regras de negocio com `Decimal`.
+- Importacao e conciliacao de planilhas.
+- Autenticacao, perfis, CSRF e recuperacao de senha.
+- Observabilidade basica, logs locais e controles operacionais.
+- Testes automatizados de regras de negocio e fluxos web.
+- Scripts PowerShell para execucao local e publicacao segura em Windows.
 
 ## Stack
 
@@ -69,34 +51,34 @@ O sistema organiza esse processo em uma aplicação web local, com foco em segur
 - SQLite em desenvolvimento local
 - Jinja2
 - HTML, CSS e JavaScript
-- PowerShell para scripts locais no Windows
+- PowerShell
 - Pytest
 
-## Qualidade e Validação
+## Qualidade e Validacao
 
-A versão publicada foi validada antes do push:
+A versao publicada foi validada antes do push:
 
 ```text
-184 testes automatizados passando
-Varredura de arquivos sensíveis no Git
-Repositório sem banco, planilhas, certificados, backups ou .env real
+220 testes automatizados passando
+Varredura de arquivos sensiveis no Git
+Repositorio sem banco, planilhas, certificados, backups ou .env real
 Commit publicado com e-mail noreply
 ```
 
 ## Estrutura
 
 ```text
-app/                         Aplicação Flask
+app/                         Aplicacao Flask
 app/models/                  Modelos SQLAlchemy
 app/routes/                  Blueprints e rotas web
-app/services/                Regras de negócio, importação e auditoria
+app/services/                Regras de negocio, importacao, auditoria e observabilidade
 app/templates/               Templates Jinja2
 app/static/                  CSS e JavaScript
-migrations/                  Histórico de migrations Alembic
+migrations/                  Historico de migrations Alembic
 tests/                       Testes automatizados
-docs/                        Documentação pública e sanitizada
-.env.example                 Exemplo de variáveis locais
-.gitignore                   Proteção contra dados sensíveis
+docs/                        Documentacao publica e sanitizada
+.env.example                 Exemplo de variaveis locais
+.gitignore                   Protecao contra dados sensiveis
 ```
 
 ## Como Rodar Localmente
@@ -127,23 +109,23 @@ Para testar HTTPS local no Windows:
 ## Testes
 
 ```powershell
-pytest
+python -m pytest -q tests
 ```
 
-## Documentação
+## Documentacao
 
 - [Arquitetura](docs/ARCHITECTURE.md)
 - [Funcionalidades](docs/FEATURES.md)
-- [Segurança e privacidade](docs/SECURITY.md)
+- [Seguranca e privacidade](docs/SECURITY.md)
 - [Setup local](docs/SETUP.md)
-- [Notas de portfólio](docs/PORTFOLIO.md)
+- [Notas de portfolio](docs/PORTFOLIO.md)
 
 ## Privacidade
 
-Este repositório foi sanitizado para publicação. Os dados reais devem permanecer fora do Git:
+Este repositorio foi sanitizado para publicacao. Os dados reais devem permanecer fora do Git:
 
 - bancos SQLite;
-- planilhas de entrada e saída;
+- planilhas de entrada e saida;
 - backups;
 - certificados locais;
 - arquivos `.env`;

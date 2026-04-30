@@ -45,6 +45,24 @@ saida/
 *.ods
 *.csv
 *.pdf
+.coverage*
+coverage.xml
+htmlcov/
+tmp_https_*.txt
+
+# Private legal / negotiation / authorship material
+docs_privados/
+docs/PRIVATE_*/
+docs/PRIVATE_*
+docs/DECLARACAO_AUTORIA_*
+docs/ANEXO_GASTOS_PESSOAIS_*
+docs/ESTRATEGIA_ACORDO_*
+docs/PROTOCOLO_PROTECAO_*
+docs/REGISTRO_*_ORIENTACAO_*
+docs/*NEGOCIACAO*
+docs/*AUTORIA*
+docs/*GASTOS_PESSOAIS*
+docs/*EXTRAORDINARIO*
 
 # IDE and OS
 .vscode/

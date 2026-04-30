@@ -1,61 +1,70 @@
 # Funcionalidades
 
-## Requisições Individuais
+## Requisicoes Individuais
 
-RPV significa Requisição de Pequeno Valor. Nesta frente, o sistema controla pagamentos judiciais tratados individualmente no fluxo financeiro.
+RPV significa Requisicao de Pequeno Valor. Nesta frente, o sistema controla pagamentos judiciais tratados individualmente no fluxo financeiro.
 
-- Cadastro de processo e beneficiário.
-- Controle de valor bruto, IRRF, valor líquido e status de pagamento.
-- Validação de documento CPF/CNPJ.
-- Identificação de registros sem IRRF.
-- Pendências documentais para casos incompletos.
-- Histórico de alterações sensíveis.
-- Edição controlada de valor bruto mediante confirmação.
+- Cadastro de processo e beneficiario.
+- Controle de valor bruto, IRRF, valor liquido e status de pagamento.
+- Validacao de documento CPF/CNPJ.
+- Identificacao de registros sem IRRF.
+- Pendencias documentais para casos incompletos.
+- Historico de alteracoes sensiveis.
+- Edicao controlada de valor bruto mediante confirmacao.
 
 ## Pagamentos em Lote
 
-Alguns pagamentos chegam agrupados em C.I.s e lotes. A aplicação separa lote, item e beneficiário para permitir acompanhamento detalhado sem perder a visão do conjunto.
+Alguns pagamentos chegam agrupados em C.I.s e lotes. A aplicacao separa lote, item e beneficiario para permitir acompanhamento detalhado sem perder a visao do conjunto.
 
-- Organização por C.I., lote e item.
-- Separação de itens com IRRF, sem IRRF e pendentes.
-- Regras de destino automático durante importação.
-- Conferência de duplicidades por documento e processo.
-- Edição controlada de campos sensíveis.
+- Organizacao por C.I., lote e item.
+- Separacao de itens com IRRF, sem IRRF e pendentes.
+- Regras de destino automatico durante importacao.
+- Conferencia de duplicidades por documento e processo.
+- Edicao controlada de campos sensiveis.
 
-## Importação Assistida
+## Importacao Assistida
 
 - Leitura de planilhas.
-- Normalização de documentos, datas, status e valores.
+- Normalizacao de documentos, datas, status e valores.
 - Bloqueio de duplicidades na planilha e no banco.
-- Conciliação de registros em estado inicial.
-- Relatórios de saída para revisão operacional.
+- Conciliacao de registros em estado inicial.
+- Relatorios de saida para revisao operacional.
 
 ## REINF e BI Operacional
 
-- Conferência mensal e anual de pagamentos com IRRF.
-- Agrupamento por beneficiário e competência.
-- Indicadores operacionais de status, pagamento e pendências.
-- Filtros por responsável, período, situação e busca textual.
-- Visão consolidada para apoiar tomada de decisão e priorização da rotina financeira.
+- Conferencia mensal e anual de pagamentos com IRRF.
+- Agrupamento por beneficiario e competencia.
+- Indicadores operacionais de status, pagamento e pendencias.
+- Filtros por responsavel, periodo, situacao e busca textual.
+- Competencia operacional baseada no mes de pagamento quando existe data de pagamento, com fallback para exercicio ou cadastro quando ainda esta em aberto.
+- Filtros seguros de competencia aplicados na consulta e preservados na camada final para evitar leituras incorretas no BI.
+- Visao consolidada para apoiar tomada de decisao e priorizacao da rotina financeira.
+
+## Operacao e Seguranca
+
+- Recuperacao de senha com entrega local segura para desenvolvimento e suporte a integracao real fora do Git.
+- Healthcheck e auditoria operacional preventiva para verificar consistencia do dataset.
+- Throttling persistente em SQLite para login e recuperacao de senha.
+- Scripts de backup e publicacao preparados para separar ambiente de desenvolvimento e runtime.
 
 ## Contexto Financeiro
 
-- Apoio ao controle de honorários advocatícios pagos pelo Estado.
-- Organização de fluxos típicos de órgão público estadual, como PGE.
-- Separação entre requisições individuais, pagamentos em lote e pendências.
-- Registro de status de empenho, ordens bancárias, IRRF e informações de conferência fiscal.
+- Apoio ao controle de honorarios advocaticios pagos pelo Estado.
+- Organizacao de fluxos tipicos de orgao publico estadual, como PGE.
+- Separacao entre requisicoes individuais, pagamentos em lote e pendencias.
+- Registro de status de empenho, ordens bancarias, IRRF e informacoes de conferencia fiscal.
 
 ## Auditoria
 
-- Registro de usuário, data, hora e ação.
+- Registro de usuario, data, hora e acao.
 - Snapshot antes/depois de campos alterados.
-- Visualização em histórico por entidade.
-- Destaque para alterações críticas e dados sensíveis.
+- Visualizacao em historico por entidade.
+- Destaque para alteracoes criticas e dados sensiveis.
 
-## Usuários e Acesso
+## Usuarios e Acesso
 
 - Login com senha criptografada.
-- Perfis de usuário e administrador.
-- Troca obrigatória de senha.
-- Recuperação de senha por código.
+- Perfis de usuario e administrador.
+- Troca obrigatoria de senha.
+- Recuperacao de senha por codigo.
 - Controle de cadastro pendente.

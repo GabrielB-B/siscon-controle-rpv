@@ -1,39 +1,41 @@
-# Notas de Portfólio
+# Notas de Portfolio
 
-Este projeto demonstra uma aplicação operacional realista, com foco em confiabilidade, rastreabilidade e tratamento seguro de dados sensíveis.
+Este projeto demonstra uma aplicacao operacional realista, com foco em confiabilidade, rastreabilidade e tratamento seguro de dados sensiveis.
 
-O domínio funcional envolve controle de Requisições de Pequeno Valor, com pagamentos de honorários advocatícios realizados pelo Estado em contexto de Procuradoria-Geral do Estado. A versão pública descreve o problema e a solução sem expor dados reais, documentos internos ou bases de produção.
+O dominio funcional envolve controle de Requisicoes de Pequeno Valor, com pagamentos de honorarios advocaticios realizados pelo Estado. A versao publica descreve o problema e a solucao sem expor dados reais, documentos internos ou bases de producao.
 
 ## Habilidades Demonstradas
 
-- Modelagem de domínio com SQLAlchemy.
-- Evolução de schema com Alembic.
-- Organização Flask por Blueprints.
+- Modelagem de dominio com SQLAlchemy.
+- Evolucao de schema com Alembic.
+- Organizacao Flask por Blueprints.
 - Regras fiscais e financeiras com `Decimal`.
-- Importação de planilhas com validação e conciliação.
-- Auditoria de alterações com snapshots.
-- Controle de acesso e recuperação de senha.
+- Importacao de planilhas com validacao e conciliacao.
+- Auditoria de alteracoes com snapshots.
+- Controle de acesso e recuperacao de senha.
 - Dashboards operacionais com filtros.
-- BI operacional para conferência de pagamentos, pendências, responsáveis e competências.
-- Testes automatizados de regras de negócio e fluxos web.
-- Separação entre código versionado e dados sensíveis.
-- Scripts locais para execução em Windows.
+- BI operacional para conferencia de pagamentos, pendencias, responsaveis e competencias.
+- Observabilidade basica com healthcheck, logs e auditoria operacional.
+- Protecao com throttling persistente em SQLite e separacao segura entre desenvolvimento e runtime.
+- Testes automatizados de regras de negocio e fluxos web.
+- Scripts locais para execucao em Windows.
 
-## Decisões de Produto
+## Decisoes de Produto
 
-- A aplicação prioriza segurança operacional: dados sensíveis ficam fora do repositório.
-- Importações não entram direto no fluxo sem validação.
-- Duplicidades são bloqueadas ou encaminhadas para revisão.
-- Histórico registra quem alterou, quando alterou e o que mudou.
-- Campos sensíveis exigem confirmação antes de alteração.
+- A aplicacao prioriza seguranca operacional: dados sensiveis ficam fora do repositorio.
+- Importacoes nao entram direto no fluxo sem validacao.
+- Duplicidades sao bloqueadas ou encaminhadas para revisao.
+- Historico registra quem alterou, quando alterou e o que mudou.
+- Campos sensiveis exigem confirmacao antes de alteracao.
+- O BI preserva a competencia correta de pagamento como regra de seguranca do dominio.
 
 ## Como Apresentar
 
-Use screenshots anonimizadas, dados fictícios e um banco local descartável. Evite imagens com nomes, documentos, processos, valores reais, IPs internos ou caminhos de máquina pessoal.
+Use screenshots anonimizadas, dados ficticios e um banco local descartavel. Evite imagens com nomes, documentos, processos, valores reais, IPs internos ou caminhos de maquina pessoal.
 
-Sugestão de narrativa:
+Sugestao de narrativa:
 
-1. Contexto: controle operacional de honorários advocatícios pagos pelo Estado via Requisições de Pequeno Valor.
+1. Contexto: controle operacional de honorarios advocaticios pagos via Requisicoes de Pequeno Valor.
 2. Problema: planilhas e fluxos manuais geram risco de erro e baixa rastreabilidade.
-3. Solução: aplicação web com validação, auditoria, dashboards e importação assistida.
-4. Resultado técnico: código modular, migrations, testes e isolamento de dados.
+3. Solucao: aplicacao web com validacao, auditoria, dashboards, observabilidade e importacao assistida.
+4. Resultado tecnico: codigo modular, migrations, testes e isolamento de dados.
