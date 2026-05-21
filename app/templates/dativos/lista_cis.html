@@ -431,7 +431,7 @@
                         </td>
                         <td class="view-pagamento">
                             <select
-                                class="status-select {{ linha.situacao_rpv.cor_badge or 'badge-slate' }}"
+                                class="status-select status-colorized"
                                 name="situacao_rpv_id"
                                 form="{{ 'quick-form-lote-' ~ linha.id if linha.tipo == 'lote_sem_irrf' else 'quick-form-item-' ~ linha.id }}"
                             >
@@ -445,7 +445,7 @@
                         <td class="view-fiscal">
                             {% if linha.tipo == "item_com_irrf" %}
                                 <select
-                                    class="status-select {{ linha.situacao_imposto.cor_badge or 'badge-slate' }}"
+                                    class="status-select status-colorized"
                                     name="situacao_imposto_id"
                                     form="{{ 'quick-form-item-' ~ linha.id }}"
                                 >

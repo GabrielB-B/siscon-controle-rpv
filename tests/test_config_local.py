@@ -44,6 +44,21 @@ class ConfigLocalTestCase(unittest.TestCase):
     def test_opcoes_de_engine_ficam_vazias_no_sqlite(self):
         self.assertEqual(config_module._engine_options("sqlite:///instance/controle_rpv.db"), {})
 
+    def test_cookie_name_padrao_da_dev_e_isolado(self):
+        self.assertEqual(
+            config_module._session_cookie_name_for_base_dir("controle_rpv"),
+            "siscon_dev_session",
+        )
+        esperado_atual = config_module._session_cookie_name_for_base_dir(config_module.BASE_DIR)
+        self.assertEqual(config_module._default_session_cookie_name(), esperado_atual)
+        self.assertEqual(config_module.Config.REMEMBER_COOKIE_NAME, f"{esperado_atual}_remember")
+
+    def test_cookie_name_runtime_e_isolado(self):
+        self.assertEqual(
+            config_module._session_cookie_name_for_base_dir("controle_rpv_runtime"),
+            "siscon_runtime_session",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

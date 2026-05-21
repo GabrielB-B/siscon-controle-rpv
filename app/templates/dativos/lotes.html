@@ -192,7 +192,7 @@
                     </td>
 
                     <td>
-                        <select class="status-select {{ lote.situacao_rpv.cor_badge or 'badge-slate' }}" name="situacao_rpv_id" form="quick-form-{{ lote.id }}">
+                        <select class="status-select status-colorized" name="situacao_rpv_id" form="quick-form-{{ lote.id }}">
                             {% for situacao in situacoes_rpv %}
                                 <option value="{{ situacao.id }}" {% if lote.situacao_rpv_id == situacao.id %}selected{% endif %}>
                                     {{ situacao.nome }}

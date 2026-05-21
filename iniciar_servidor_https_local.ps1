@@ -1,12 +1,23 @@
 param(
     [string]$ServerIp,
-    [int]$Port = 8443,
+    [int]$Port = 8445,
     [switch]$ForceCert
 )
 
 $ErrorActionPreference = "Stop"
 
-$python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+$projectRoot = (Resolve-Path $PSScriptRoot).Path
+$projectFolder = Split-Path $projectRoot -Leaf
+
+if ($projectFolder -like "*runtime*") {
+    throw "Este script e para DEV. Caminho atual: $projectRoot. Para runtime, use C:\Users\gabriel.bispo\Documents\controle_rpv_runtime\executar_runtime_servico_https.ps1"
+}
+
+if ($Port -eq 8443) {
+    throw "Porta 8443 e reservada para a runtime. Suba a dev em 8445: .\iniciar_servidor_https_local.ps1 -ServerIp <IP> -Port 8445 -ForceCert"
+}
+
+$python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 
 if (-not (Test-Path $python)) {
     Write-Error "Ambiente virtual nao encontrado em .venv\\Scripts\\python.exe"
@@ -22,13 +33,13 @@ if (-not $ServerIp) {
     Write-Error "Nao foi possivel identificar o IP local. Informe -ServerIp manualmente."
 }
 
-$certDir = Join-Path $PSScriptRoot "instance\certs"
+$certDir = Join-Path $projectRoot "instance\certs"
 $serverCert = Join-Path $certDir "controle_rpv_local.crt"
 $serverKey = Join-Path $certDir "controle_rpv_local.key"
 $rootCert = Join-Path $certDir "controle_rpv_local_ca.crt"
 $ruleName = "Controle RPV HTTPS $Port"
 
-Push-Location $PSScriptRoot
+Push-Location $projectRoot
 try {
     Write-Host "Aplicando migrations..." -ForegroundColor Cyan
     & $python -m flask db upgrade heads

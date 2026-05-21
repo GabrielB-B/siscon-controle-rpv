@@ -1681,6 +1681,7 @@ def editar_item_lote(lote_id, item_id):
                 numero_processo=numero_processo,
                 valor_bruto=valor_bruto,
                 usuario_id=current_user.id,
+                data_pagamento=item.data_pagamento,
                 observacoes=observacoes,
                 dispensa_irrf_confirmada=dispensa_irrf_confirmada,
                 permitir_duplicidade_confirmada=confirmar_processo_existente,
@@ -1787,6 +1788,7 @@ def atualizacao_rapida_lote(lote_id):
         status_cancelado = situacao_id_eh_cancelado(SituacaoEmpenho, situacao_rpv_id)
 
         nota_empenho = request.form.get("nota_empenho", "").strip() or None
+        numero_se_informado = "numero_se" in request.form
         numero_se = request.form.get("numero_se", "").strip() or None
         ordem_bancaria = request.form.get("ordem_bancaria", "").strip() or None
         validar_referencias_pagamento_principal(
@@ -1797,7 +1799,8 @@ def atualizacao_rapida_lote(lote_id):
         )
 
         lote.nota_empenho = nota_empenho
-        lote.numero_se = numero_se
+        if numero_se_informado:
+            lote.numero_se = numero_se
         lote.ordem_bancaria = ordem_bancaria
         lote.situacao_rpv_id = int(situacao_rpv_id)
         lote.situacao_imposto_id = DativosService.obter_situacao_imposto_sem_irrf().id
@@ -1960,6 +1963,7 @@ def atualizacao_rapida_item(item_id):
         status_cancelado = situacao_id_eh_cancelado(SituacaoEmpenho, situacao_rpv_id)
 
         nota_empenho = request.form.get("nota_empenho", "").strip() or None
+        numero_se_informado = "numero_se" in request.form
         numero_se = request.form.get("numero_se", "").strip() or None
         ordem_bancaria = request.form.get("ordem_bancaria", "").strip() or None
         validar_referencias_pagamento_principal(
@@ -1970,7 +1974,8 @@ def atualizacao_rapida_item(item_id):
         )
 
         item.nota_empenho = nota_empenho
-        item.numero_se = numero_se
+        if numero_se_informado:
+            item.numero_se = numero_se
         item.ordem_bancaria = ordem_bancaria
         item.ob_imposto = request.form.get("ob_imposto", "").strip() or None
         item.situacao_rpv_id = int(situacao_rpv_id)

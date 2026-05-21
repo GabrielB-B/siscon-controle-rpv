@@ -24,6 +24,8 @@
     action="{{ url_for('dativos.salvar_item_com_irrf', item_id=item.id, retorno=url_retorno) }}"
     data-irrf-calculator
     data-irrf-calc-url="{{ url_for('dativos.calcular_irrf_sugerido') }}"
+    data-draft-key="dativos-item-com-irrf-{{ item.id }}"
+    data-draft-label="O andamento deste item"
     data-payment-date-confirm="true"
     data-payment-date-title="Confirmar data manual de pagamento"
     data-payment-date-message="Voce alterou manualmente a data do pagamento. BI, competencia operacional e a fila mensal da REINF passarao a seguir essa data. Deseja continuar?"

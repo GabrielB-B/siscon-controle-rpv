@@ -103,6 +103,223 @@ document.addEventListener("DOMContentLoaded", () => {
             button.textContent = button.getAttribute("data-label-open") || "Fechar detalhes";
         });
     });
+
+    const reviewTable = document.querySelector("[data-reinf-review-scope]");
+    if (reviewTable) {
+        const reviewForms = Array.from(document.querySelectorAll("[data-reinf-review-form][data-review-item-key]"));
+        const reviewButtons = reviewForms
+            .map((form) => form.querySelector("[data-reinf-review-toggle][data-review-item-key]"))
+            .filter(Boolean);
+        const reviewSummary = document.querySelector("[data-reinf-review-summary]");
+        const groupRows = new Map();
+        const progressCards = new Map();
+        const processCards = new Map();
+        const buttonsByItem = new Map();
+        const itemKeysByGroup = new Map();
+        const reviewState = {};
+
+        Array.from(document.querySelectorAll("[data-reinf-review-row], [data-reinf-review-detail]")).forEach((row) => {
+            const reviewGroup = row.getAttribute("data-review-group");
+            if (!reviewGroup) {
+                return;
+            }
+            if (!groupRows.has(reviewGroup)) {
+                groupRows.set(reviewGroup, []);
+            }
+            groupRows.get(reviewGroup).push(row);
+        });
+
+        Array.from(document.querySelectorAll("[data-reinf-progress-summary]")).forEach((card) => {
+            const reviewGroup = card.getAttribute("data-review-group");
+            if (!reviewGroup) {
+                return;
+            }
+            if (!progressCards.has(reviewGroup)) {
+                progressCards.set(reviewGroup, []);
+            }
+            progressCards.get(reviewGroup).push(card);
+        });
+
+        Array.from(document.querySelectorAll("[data-reinf-review-item]")).forEach((card) => {
+            const itemKey = card.getAttribute("data-review-item-key");
+            const reviewGroup = card.getAttribute("data-review-group");
+            if (!itemKey || !reviewGroup) {
+                return;
+            }
+            processCards.set(itemKey, card);
+            if (!itemKeysByGroup.has(reviewGroup)) {
+                itemKeysByGroup.set(reviewGroup, []);
+            }
+            itemKeysByGroup.get(reviewGroup).push(itemKey);
+        });
+
+        const updateReviewSummary = () => {
+            if (!reviewSummary) {
+                return;
+            }
+            const reviewedCount = Object.values(reviewState).filter(Boolean).length;
+            reviewSummary.textContent = reviewedCount
+                ? `${reviewedCount} de ${reviewButtons.length} processo(s) conferido(s)`
+                : "Nenhum processo conferido";
+        };
+
+        const updateProgressCards = (reviewGroup, reviewedCount, totalCount) => {
+            const cards = progressCards.get(reviewGroup) || [];
+            const progressLabel = reviewedCount === 0
+                ? "Por conferir"
+                : reviewedCount === totalCount
+                    ? "beneficiario fechado"
+                    : "processos conferidos";
+
+            cards.forEach((card) => {
+                const count = card.querySelector("[data-reinf-progress-count]");
+                const label = card.querySelector("[data-reinf-progress-label]");
+                card.dataset.reviewState = reviewedCount === 0
+                    ? "idle"
+                    : reviewedCount === totalCount
+                        ? "complete"
+                        : "partial";
+                if (count) {
+                    count.textContent = `${reviewedCount}/${totalCount}`;
+                }
+                if (label) {
+                    label.textContent = progressLabel;
+                }
+            });
+        };
+
+        const syncReviewGroup = (reviewGroup) => {
+            const itemKeys = itemKeysByGroup.get(reviewGroup) || [];
+            const reviewedCount = itemKeys.filter((itemKey) => Boolean(reviewState[itemKey])).length;
+            const totalCount = itemKeys.length;
+            const isReviewed = totalCount > 0 && reviewedCount === totalCount;
+            const isPartial = reviewedCount > 0 && reviewedCount < totalCount;
+
+            updateProgressCards(reviewGroup, reviewedCount, totalCount);
+
+            const rows = groupRows.get(reviewGroup) || [];
+            rows.forEach((row) => {
+                row.classList.toggle("is-reviewed", isReviewed);
+                row.classList.toggle("is-partial-reviewed", isPartial);
+            });
+        };
+
+        const applyReviewedState = (itemKey, isReviewed, reviewedMeta = "") => {
+            const button = buttonsByItem.get(itemKey);
+            if (button) {
+                button.setAttribute("aria-pressed", isReviewed ? "true" : "false");
+                const label = button.querySelector("strong");
+                const meta = button.querySelector("[data-reinf-review-meta]");
+                if (label) {
+                    label.textContent = isReviewed
+                        ? button.getAttribute("data-label-active") || "Conferido"
+                        : button.getAttribute("data-label-default") || "Marcar";
+                }
+                if (meta) {
+                    meta.textContent = isReviewed
+                        ? reviewedMeta || button.getAttribute("data-meta-reviewed") || "Conferido no historico."
+                        : button.getAttribute("data-meta-default") || "este processo";
+                }
+            }
+
+            const form = reviewForms.find((item) => item.getAttribute("data-review-item-key") === itemKey);
+            const intentInput = form?.querySelector("[data-reinf-review-intent]");
+            if (intentInput) {
+                intentInput.value = isReviewed ? "0" : "1";
+            }
+
+            const card = processCards.get(itemKey);
+            if (card) {
+                card.classList.toggle("is-reviewed", isReviewed);
+            }
+        };
+
+        reviewForms.forEach((form) => {
+            const button = form.querySelector("[data-reinf-review-toggle][data-review-item-key]");
+            if (!button) {
+                return;
+            }
+
+            const itemKey = button.getAttribute("data-review-item-key");
+            const reviewGroup = button.getAttribute("data-review-group");
+            if (!itemKey || !reviewGroup) {
+                return;
+            }
+
+            buttonsByItem.set(itemKey, button);
+            reviewState[itemKey] = button.getAttribute("aria-pressed") === "true";
+            applyReviewedState(
+                itemKey,
+                Boolean(reviewState[itemKey]),
+                button.getAttribute("data-meta-reviewed") || "",
+            );
+
+            form.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                const nextState = !Boolean(reviewState[itemKey]);
+                const intentInput = form.querySelector("[data-reinf-review-intent]");
+                const meta = button.querySelector("[data-reinf-review-meta]");
+                button.disabled = true;
+                if (intentInput) {
+                    intentInput.value = nextState ? "1" : "0";
+                }
+                if (meta) {
+                    meta.textContent = nextState
+                        ? "Salvando conferencia..."
+                        : "Removendo conferencia...";
+                }
+
+                try {
+                    const csrfField = form.querySelector('input[name="csrf_token"]');
+                    const response = await fetch(form.action, {
+                        method: "POST",
+                        headers: {
+                            "Accept": "application/json",
+                            "X-CSRF-Token": csrfField ? csrfField.value : "",
+                            "X-Requested-With": "fetch",
+                        },
+                        body: new FormData(form),
+                    });
+
+                    const payload = await response.json();
+                    if (!response.ok || !payload.ok) {
+                        throw new Error(payload.message || "Nao foi possivel salvar a conferencia deste processo agora.");
+                    }
+
+                    if (payload.reviewed_meta) {
+                        button.setAttribute("data-meta-reviewed", payload.reviewed_meta);
+                    }
+
+                    reviewState[itemKey] = Boolean(payload.reviewed);
+                    applyReviewedState(
+                        itemKey,
+                        Boolean(payload.reviewed),
+                        payload.reviewed_meta || "",
+                    );
+                    syncReviewGroup(reviewGroup);
+                    updateReviewSummary();
+                } catch (error) {
+                    applyReviewedState(
+                        itemKey,
+                        Boolean(reviewState[itemKey]),
+                        button.getAttribute("data-meta-reviewed") || "",
+                    );
+                    window.alert(
+                        error instanceof Error
+                            ? error.message
+                            : "Nao foi possivel salvar a conferencia deste processo agora."
+                    );
+                } finally {
+                    button.disabled = false;
+                }
+            });
+        });
+
+        itemKeysByGroup.forEach((_, reviewGroup) => {
+            syncReviewGroup(reviewGroup);
+        });
+        updateReviewSummary();
+    }
 });
 </script>
 {% endblock %}

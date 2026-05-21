@@ -1,0 +1,50 @@
+{% import "components/value_display.html" as values %}
+
+{% macro render(item, show_note=False) -%}
+    <article class="bi-beneficiary-card">
+        <div class="progress-item-head">
+            <div>
+                <strong>{{ item.label }}</strong>
+                <div class="progress-meta">{{ item.documento }} | {{ item.quantidade }} registro(s)</div>
+            </div>
+            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+        </div>
+
+        <div class="progress-track">
+            <div class="progress-bar progress-bar-secondary" style="width: {{ item.percentual }}%;"></div>
+        </div>
+
+        <div class="bi-beneficiary-splits">
+            <span>Sem IRRF: {{ values.render_value(item.valor_sem_irrf, 'moeda', 'compact') }}</span>
+            <span>Com IRRF: {{ values.render_value(item.valor_com_irrf, 'moeda', 'compact') }}</span>
+            {% if item.valor_irrf_total > 0 %}
+                <span>IRRF retido: {{ values.render_value(item.valor_irrf_total, 'moeda', 'compact') }}</span>
+            {% endif %}
+        </div>
+
+        {% if show_note and item.observacao_fiscal %}
+            <div class="bi-beneficiary-tax-note {% if item.tem_retencao %}is-attention{% endif %}">
+                {{ item.observacao_fiscal }}
+            </div>
+        {% endif %}
+
+        {% if item.competencias %}
+            <details class="bi-beneficiary-details">
+                <summary>Ver ultimas competencias</summary>
+                <div class="bi-beneficiary-month-grid">
+                    {% for competencia in item.competencias %}
+                        <article class="bi-beneficiary-month-pill">
+                            <strong>{{ competencia.label }}</strong>
+                            <span>Total {{ values.render_value(competencia.valor_total, 'moeda', 'compact') }}</span>
+                            <span>Sem IRRF {{ values.render_value(competencia.valor_sem_irrf, 'moeda', 'compact') }}</span>
+                            <span>Com IRRF {{ values.render_value(competencia.valor_com_irrf, 'moeda', 'compact') }}</span>
+                            {% if competencia.valor_irrf > 0 %}
+                                <span>IRRF retido {{ values.render_value(competencia.valor_irrf, 'moeda', 'compact') }}</span>
+                            {% endif %}
+                        </article>
+                    {% endfor %}
+                </div>
+            </details>
+        {% endif %}
+    </article>
+{%- endmacro %}

@@ -364,11 +364,6 @@ if ((Test-Path $sourceDbPath) -and ((-not (Test-Path $runtimeDbPath)) -or $Force
 
 $copyTargets = @(
     @{
-        Source = Join-Path $sourceInstancePath ".secret_key"
-        Destination = Join-Path $runtimeInstancePath ".secret_key"
-        Recurse = $false
-    },
-    @{
         Source = Join-Path $sourceInstancePath "admin_bootstrap_password.txt"
         Destination = Join-Path $runtimeInstancePath "admin_bootstrap_password.txt"
         Recurse = $false

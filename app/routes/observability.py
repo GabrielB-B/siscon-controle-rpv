@@ -14,7 +14,7 @@ observability_bp = Blueprint("observability", __name__)
 
 @observability_bp.route("/health", methods=["GET"])
 def health():
-    payload = collect_health_snapshot()
+    payload = collect_health_snapshot(public=True)
     status_code = 200 if payload["status"] in {"ok", "info"} else 503
     return jsonify(payload), status_code
 
@@ -28,4 +28,3 @@ def operational_health():
     payload = collect_operational_audit_report()
     status_code = 200 if payload["status"] in {"ok", "info"} else 409
     return jsonify(payload), status_code
-

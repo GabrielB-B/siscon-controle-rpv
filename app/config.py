@@ -55,6 +55,22 @@ def _engine_options(database_url: str) -> dict:
     return {}
 
 
+def _session_cookie_name_for_base_dir(base_dir: str | Path) -> str:
+    folder_name = Path(str(base_dir)).name.strip().lower()
+    if folder_name.endswith("_runtime"):
+        return "siscon_runtime_session"
+    if folder_name == "controle_rpv":
+        return "siscon_dev_session"
+
+    normalized_name = "".join(ch if ch.isalnum() else "_" for ch in folder_name)
+    normalized_name = "_".join(part for part in normalized_name.split("_") if part) or "siscon"
+    return f"{normalized_name}_session"
+
+
+def _default_session_cookie_name() -> str:
+    return _session_cookie_name_for_base_dir(BASE_DIR)
+
+
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY")
     SQLALCHEMY_DATABASE_URI = _normalize_database_url(os.getenv("DATABASE_URL"))
@@ -64,7 +80,7 @@ class Config:
     CSRF_ENABLED = _env_flag("CSRF_ENABLED", True)
     APP_RELEASE_LABEL = os.getenv(
         "APP_RELEASE_LABEL",
-        "Atualizacao Operacional Atlas | Beta interna 2026.03 | Patch 002",
+        "Atualizacao Operacional Atlas | Beta interna 2026.05 | Patch 003",
     )
     APP_EXTERNAL_URL = str(os.getenv("APP_EXTERNAL_URL") or "").strip() or None
     PASSWORD_RESET_CODE_TTL_MINUTES = _env_int("PASSWORD_RESET_CODE_TTL_MINUTES", 10)
@@ -131,9 +147,16 @@ class Config:
     SMS_WEBHOOK_USERNAME = str(os.getenv("SMS_WEBHOOK_USERNAME") or "").strip() or None
     SMS_WEBHOOK_PASSWORD = str(os.getenv("SMS_WEBHOOK_PASSWORD") or "").strip() or None
     SMS_WEBHOOK_PAYLOAD_STYLE = str(os.getenv("SMS_WEBHOOK_PAYLOAD_STYLE") or "generic").strip().lower()
+    TRUST_PROXY_HEADERS = _env_flag("TRUST_PROXY_HEADERS", False)
+    SESSION_COOKIE_NAME = str(
+        os.getenv("SESSION_COOKIE_NAME") or _default_session_cookie_name()
+    ).strip() or _default_session_cookie_name()
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = _env_flag("SESSION_COOKIE_SECURE", False)
+    REMEMBER_COOKIE_NAME = str(
+        os.getenv("REMEMBER_COOKIE_NAME") or f"{SESSION_COOKIE_NAME}_remember"
+    ).strip() or f"{SESSION_COOKIE_NAME}_remember"
     REMEMBER_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_SAMESITE = "Lax"
     REMEMBER_COOKIE_SECURE = SESSION_COOKIE_SECURE

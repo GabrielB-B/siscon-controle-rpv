@@ -81,6 +81,8 @@
     method="POST"
     data-irrf-calculator
     data-irrf-calc-url="{{ url_for('cadastros.calcular_irrf_sugerido') }}"
+    data-draft-key="cadastros-editar-rpv-{{ registro.id }}"
+    data-draft-label="O andamento deste RPV"
     data-payment-date-confirm="true"
     data-payment-date-title="Confirmar data manual de pagamento"
     data-payment-date-message="Voce alterou manualmente a data do pagamento principal. BI, competencia operacional e a fila mensal da REINF passarao a seguir essa data. Deseja continuar?"
@@ -167,7 +169,7 @@
                 <div class="irrf-assist-header">
                     <div class="irrf-assist-copy">
                         <span class="irrf-assist-title">Calculo assistido</span>
-                        <p class="muted stacked-flow-note">Refaz a sugestao operacional de 2026 com base no bruto, na competencia e no documento atuais.</p>
+                        <p class="muted stacked-flow-note">Refaz a sugestao operacional cadastrada para o ano da competencia com base no bruto e no documento atuais.</p>
                     </div>
                     <button type="button" class="btn btn-secondary btn-sm" data-irrf-action="calculate">
                         Calcular IRRF sugerido

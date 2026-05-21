@@ -3,14 +3,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from io import StringIO
 
-from flask import Blueprint, Response, current_app, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 from unidecode import unidecode
 
 from app.extensions import db
-from app.models import DativoCI, DativoItem, Processo, RegistroRPV, User
+from app.models import DativoCI, DativoItem, HistoricoAlteracao, Processo, RegistroRPV, User
 from app.services.audit_service import registrar_evento, snapshot_entidade
 from app.utils.formatters import formatar_documento_br
 from app.utils.navigation import current_internal_url, sanitize_internal_return_url
@@ -59,6 +59,9 @@ REINF_VISOES = {
 }
 REINF_ORDENACAO_PADRAO = "beneficiario"
 REINF_DIRECAO_PADRAO = "asc"
+REINF_CONFERENCIA_MENSAL_ACAO = "Conferencia REINF mensal"
+REINF_CONFERENCIA_MENSAL_RESUMO = "Processo conferido na leitura mensal da REINF."
+REINF_CONFERENCIA_MENSAL_RESUMO_REMOVIDO = "Processo desmarcado na leitura mensal da REINF."
 
 
 def _url_retorno_interna(padrao: str) -> str:
@@ -89,6 +92,12 @@ def _competencia_legivel(valor: str | None) -> str:
         }
         return f"{meses.get(mes, mes)}/{ano}"
     return competencia or "-"
+
+
+def _data_hora_legivel(valor) -> str:
+    if isinstance(valor, datetime):
+        return valor.strftime("%d/%m/%Y as %H:%M")
+    return "-"
 
 
 def _normalizar_texto(valor: str | None) -> str:
@@ -124,6 +133,167 @@ def _status_reinf_concluido(status: str | None) -> bool:
 
 def _status_reinf_resolvido(status: str | None) -> bool:
     return reinf_status_esta_resolvido(status)
+
+
+def _entidade_tipo_reinf_por_origem(origem: str) -> str:
+    valor = str(origem or "").strip()
+    if valor == "rpv":
+        return "registro_rpv"
+    if valor == "dativo_item":
+        return "dativo_item"
+    raise ValueError("Origem invalida para a conferencia da REINF.")
+
+
+def _carregar_entidade_conferencia_reinf(origem: str, registro_id: int):
+    valor = str(origem or "").strip()
+    if valor == "rpv":
+        entidade = db.session.get(RegistroRPV, registro_id)
+    elif valor == "dativo_item":
+        entidade = db.session.get(DativoItem, registro_id)
+    else:
+        raise ValueError("Origem invalida para a conferencia da REINF.")
+
+    if not entidade or not getattr(entidade, "ativo", True):
+        raise ValueError("Processo da conferencia REINF nao encontrado.")
+
+    return entidade
+
+
+def _evento_conferencia_reinf_mensal(entidade_tipo: str, entidade_id: int):
+    return (
+        HistoricoAlteracao.query.options(joinedload(HistoricoAlteracao.alterado_por))
+        .filter_by(
+            entidade_tipo=entidade_tipo,
+            entidade_id=entidade_id,
+            acao=REINF_CONFERENCIA_MENSAL_ACAO,
+        )
+        .order_by(HistoricoAlteracao.criado_em.desc(), HistoricoAlteracao.id.desc())
+        .first()
+    )
+
+
+def _estado_evento_conferencia_reinf_mensal(evento: HistoricoAlteracao | None) -> bool:
+    if not evento:
+        return False
+
+    for alteracao in evento.alteracoes:
+        if str(alteracao.get("campo") or "").strip() != "conferencia_reinf_mensal":
+            continue
+
+        valor_para = _normalizar_texto(alteracao.get("para"))
+        if valor_para in {"conferido", "marcado", "sim", "true", "1"}:
+            return True
+        if valor_para in {"pendente", "desmarcado", "nao", "false", "0"}:
+            return False
+
+    resumo = _normalizar_texto(getattr(evento, "resumo", None))
+    if "desmarcado" in resumo or "removido" in resumo:
+        return False
+    return True
+
+
+def _detalhes_conferencia_reinf_mensal(antes: bool, depois: bool) -> list[dict]:
+    return [
+        {
+            "campo": "conferencia_reinf_mensal",
+            "label": "Conferencia REINF mensal",
+            "de": "Conferido" if antes else "Pendente",
+            "para": "Conferido" if depois else "Pendente",
+        }
+    ]
+
+
+def _estado_revisado_formulario(valor: str | None) -> bool:
+    texto = _normalizar_texto(valor)
+    if texto in {"0", "false", "nao", "off"}:
+        return False
+    return True
+
+
+def _meta_evento_conferencia_reinf_mensal(evento: HistoricoAlteracao | None) -> dict:
+    revisado = _estado_evento_conferencia_reinf_mensal(evento)
+    if not evento or not revisado:
+        return {
+            "revisado": False,
+            "revisado_por": "",
+            "revisado_em": None,
+            "revisado_em_legivel": "",
+            "revisado_meta": "",
+        }
+
+    revisado_por = getattr(getattr(evento, "alterado_por", None), "nome", None) or "Nao informado"
+    revisado_em_legivel = _data_hora_legivel(evento.criado_em)
+    return {
+        "revisado": revisado,
+        "revisado_por": revisado_por,
+        "revisado_em": evento.criado_em,
+        "revisado_em_legivel": revisado_em_legivel,
+        "revisado_meta": f"Conferido por {revisado_por} em {revisado_em_legivel}",
+    }
+
+
+def _rotulo_progresso_conferencia(revisados: int, total: int) -> str:
+    if revisados <= 0:
+        return "Por conferir"
+    if total > 0 and revisados == total:
+        return "beneficiario fechado"
+    return "processos conferidos"
+
+
+def _resumo_conferencia_beneficiarios(revisados: int, total: int) -> str:
+    if revisados <= 0 or total <= 0:
+        return "Nenhum conferido"
+    return f"{revisados} de {total} conferido(s)"
+
+
+def _resumo_conferencia_processos(revisados: int, total: int) -> str:
+    if revisados <= 0 or total <= 0:
+        return "Nenhum processo conferido"
+    return f"{revisados} de {total} processo(s) conferido(s)"
+
+
+def _mapa_conferencia_reinf_mensal(registros: list[dict]) -> dict[tuple[str, int], dict]:
+    ids_rpv = sorted(
+        {
+            int(registro["registro_id"])
+            for registro in registros
+            if str(registro.get("origem") or "").strip() == "rpv" and registro.get("registro_id")
+        }
+    )
+    ids_dativos = sorted(
+        {
+            int(registro["registro_id"])
+            for registro in registros
+            if str(registro.get("origem") or "").strip() == "dativo_item" and registro.get("registro_id")
+        }
+    )
+
+    mapa: dict[tuple[str, int], dict] = {}
+
+    def carregar(entidade_tipo: str, origem_chave: str, ids: list[int]) -> None:
+        if not ids:
+            return
+
+        eventos = (
+            HistoricoAlteracao.query.options(joinedload(HistoricoAlteracao.alterado_por))
+            .filter(
+                HistoricoAlteracao.entidade_tipo == entidade_tipo,
+                HistoricoAlteracao.entidade_id.in_(ids),
+                HistoricoAlteracao.acao == REINF_CONFERENCIA_MENSAL_ACAO,
+            )
+            .order_by(HistoricoAlteracao.criado_em.desc(), HistoricoAlteracao.id.desc())
+            .all()
+        )
+
+        for evento in eventos:
+            chave = (origem_chave, int(evento.entidade_id))
+            if chave in mapa:
+                continue
+            mapa[chave] = _meta_evento_conferencia_reinf_mensal(evento)
+
+    carregar("registro_rpv", "rpv", ids_rpv)
+    carregar("dativo_item", "dativo_item", ids_dativos)
+    return mapa
 
 
 def _tem_irrf_rpv(registro: RegistroRPV) -> bool:
@@ -686,9 +856,13 @@ def _chave_beneficiario_reinf(registro: dict) -> tuple[str, str]:
 
 def _linhas_conferencia_reinf_mensal(registros: list[dict], competencia: str) -> dict:
     agrupado = {}
+    mapa_conferencia = _mapa_conferencia_reinf_mensal(registros)
 
     for registro in registros:
         chave = _chave_beneficiario_reinf(registro)
+        conferencia_meta = mapa_conferencia.get(
+            (str(registro.get("origem") or "").strip(), int(registro["registro_id"]))
+        ) or _meta_evento_conferencia_reinf_mensal(None)
         linha = agrupado.setdefault(
             chave,
             {
@@ -706,6 +880,8 @@ def _linhas_conferencia_reinf_mensal(registros: list[dict], competencia: str) ->
         linha["valor_irrf"] += _decimal(registro["imposto"])
         linha["pagamentos"].append(
             {
+                "registro_id": registro["registro_id"],
+                "origem_chave": registro["origem"],
                 "origem": registro["tipo_origem"],
                 "processo": registro["processo"],
                 "ci": registro["ci"],
@@ -719,6 +895,11 @@ def _linhas_conferencia_reinf_mensal(registros: list[dict], competencia: str) ->
                 "valor_irrf": _decimal(registro["imposto"]),
                 "valor_liquido": _decimal(registro["valor_liquido"]),
                 "abrir_url": registro["abrir_url"],
+                "conferencia_revisada": bool(conferencia_meta["revisado"]),
+                "conferencia_revisada_por": conferencia_meta["revisado_por"],
+                "conferencia_revisada_em": conferencia_meta["revisado_em"],
+                "conferencia_revisada_em_legivel": conferencia_meta["revisado_em_legivel"],
+                "conferencia_revisada_meta": conferencia_meta["revisado_meta"],
             }
         )
 
@@ -732,6 +913,22 @@ def _linhas_conferencia_reinf_mensal(registros: list[dict], competencia: str) ->
             ),
             reverse=True,
         )
+        linha["pagamentos_conferidos"] = sum(
+            1 for pagamento in linha["pagamentos"] if pagamento["conferencia_revisada"]
+        )
+        linha["total_pagamentos"] = len(linha["pagamentos"])
+        linha["rotulo_progresso_conferencia"] = _rotulo_progresso_conferencia(
+            linha["pagamentos_conferidos"],
+            linha["total_pagamentos"],
+        )
+        linha["todos_processos_conferidos"] = (
+            linha["total_pagamentos"] > 0
+            and linha["pagamentos_conferidos"] == linha["total_pagamentos"]
+        )
+        linha["processos_conferidos_parcialmente"] = (
+            linha["pagamentos_conferidos"] > 0
+            and not linha["todos_processos_conferidos"]
+        )
 
     linhas.sort(
         key=lambda item: (
@@ -740,12 +937,23 @@ def _linhas_conferencia_reinf_mensal(registros: list[dict], competencia: str) ->
             _normalizar_texto(item["beneficiario"]),
         )
     )
+    total_pagamentos = sum(len(linha["pagamentos"]) for linha in linhas)
+    total_processos_conferidos = sum(linha["pagamentos_conferidos"] for linha in linhas)
+    total_beneficiarios_conferidos = sum(
+        1 for linha in linhas if linha["todos_processos_conferidos"]
+    )
     return {
         "linhas": linhas,
         "tem_dados": bool(linhas),
+        "resumo_conferencia": _resumo_conferencia_processos(
+            total_processos_conferidos,
+            total_pagamentos,
+        ),
         "totais": {
             "beneficiarios": len(linhas),
-            "pagamentos": sum(len(linha["pagamentos"]) for linha in linhas),
+            "beneficiarios_conferidos": total_beneficiarios_conferidos,
+            "pagamentos": total_pagamentos,
+            "pagamentos_conferidos": total_processos_conferidos,
             "valor_base": sum((linha["valor_base"] for linha in linhas), Decimal("0.00")),
             "valor_irrf": sum((linha["valor_irrf"] for linha in linhas), Decimal("0.00")),
         },
@@ -1294,5 +1502,102 @@ def atualizar_status_lote():
             getattr(current_user, "id", None),
         )
         flash("Nao foi possivel atualizar a REINF em lote agora. Tente novamente.", "danger")
+
+    return redirect(_url_retorno_interna(url_for("reinf.index")))
+
+
+@reinf_bp.route("/marcar-conferencia-processo", methods=["POST"])
+@login_required
+def marcar_conferencia_processo():
+    wants_json = (
+        request.headers.get("X-Requested-With") == "fetch"
+        or "application/json" in str(request.headers.get("Accept") or "")
+    )
+    origem = request.form.get("origem", "").strip()
+    registro_id_raw = request.form.get("registro_id", "").strip()
+    revisado_desejado = _estado_revisado_formulario(request.form.get("revisado"))
+
+    try:
+        if not registro_id_raw.isdigit():
+            raise ValueError("Processo da conferencia REINF invalido.")
+
+        entidade_tipo = _entidade_tipo_reinf_por_origem(origem)
+        entidade = _carregar_entidade_conferencia_reinf(origem, int(registro_id_raw))
+        evento_existente = _evento_conferencia_reinf_mensal(entidade_tipo, entidade.id)
+        meta_atual = _meta_evento_conferencia_reinf_mensal(evento_existente)
+        criado_agora = False
+
+        if meta_atual["revisado"] != revisado_desejado:
+            historico = registrar_evento(
+                entidade_tipo=entidade_tipo,
+                entidade_id=entidade.id,
+                usuario_id=current_user.id,
+                acao=REINF_CONFERENCIA_MENSAL_ACAO,
+                resumo=(
+                    REINF_CONFERENCIA_MENSAL_RESUMO
+                    if revisado_desejado
+                    else REINF_CONFERENCIA_MENSAL_RESUMO_REMOVIDO
+                ),
+                forcar_registro=True,
+            )
+            if historico is not None:
+                historico.definir_alteracoes(
+                    _detalhes_conferencia_reinf_mensal(
+                        meta_atual["revisado"],
+                        revisado_desejado,
+                    )
+                )
+            db.session.commit()
+            criado_agora = True
+            evento_existente = _evento_conferencia_reinf_mensal(entidade_tipo, entidade.id)
+
+        meta_evento = _meta_evento_conferencia_reinf_mensal(evento_existente)
+        mensagem = (
+            (
+                "Processo marcado como conferido na conferencia mensal da REINF."
+                if criado_agora
+                else "Esse processo ja estava conferido na conferencia mensal da REINF."
+            )
+            if revisado_desejado
+            else (
+                "Conferencia removida deste processo na leitura mensal da REINF."
+                if criado_agora
+                else "Esse processo ja estava sem conferencia marcada na leitura mensal da REINF."
+            )
+        )
+
+        if wants_json:
+            return jsonify(
+                {
+                    "ok": True,
+                    "created": criado_agora,
+                    "reviewed": meta_evento["revisado"],
+                    "message": mensagem,
+                    "reviewed_meta": meta_evento["revisado_meta"],
+                    "reviewed_by": meta_evento["revisado_por"],
+                    "reviewed_at": meta_evento["revisado_em_legivel"],
+                }
+            )
+
+        flash(mensagem, "success" if criado_agora else "info")
+    except ValueError as exc:
+        db.session.rollback()
+        if wants_json:
+            return jsonify({"ok": False, "message": str(exc)}), 400
+        flash(str(exc), "warning")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Falha ao marcar processo como conferido na REINF mensal. origem=%s registro_id=%s usuario_id=%s",
+            origem,
+            registro_id_raw,
+            getattr(current_user, "id", None),
+        )
+        mensagem = (
+            "Nao foi possivel salvar a conferencia deste processo agora. Tente novamente."
+        )
+        if wants_json:
+            return jsonify({"ok": False, "message": mensagem}), 500
+        flash(mensagem, "danger")
 
     return redirect(_url_retorno_interna(url_for("reinf.index")))

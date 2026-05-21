@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from app.extensions import db
 from app.models import DativoCI, DativoItem, DativoLote, SituacaoEmpenho, SituacaoImposto
+from app.utils.domain_profile import get_domain_profile
 from app.utils.normalizers import normalizar_documento
 
 
@@ -12,23 +13,26 @@ class DativosService:
 
     @staticmethod
     def obter_situacao_rpv_inicial() -> SituacaoEmpenho:
-        situacao = SituacaoEmpenho.query.filter_by(nome="Sem Tratamento").first()
+        nome = get_domain_profile().situacao_empenho_inicial_nome
+        situacao = SituacaoEmpenho.query.filter_by(nome=nome).first()
         if not situacao:
-            raise ValueError("Situacao inicial do RPV 'Sem Tratamento' nao encontrada.")
+            raise ValueError(f"Situacao inicial do RPV '{nome}' nao encontrada.")
         return situacao
 
     @staticmethod
     def obter_situacao_imposto_sem_tratamento() -> SituacaoImposto:
-        situacao = SituacaoImposto.query.filter_by(nome="Sem Tratamento").first()
+        nome = get_domain_profile().situacao_imposto_inicial_nome
+        situacao = SituacaoImposto.query.filter_by(nome=nome).first()
         if not situacao:
-            raise ValueError("Situacao inicial do imposto 'Sem Tratamento' nao encontrada.")
+            raise ValueError(f"Situacao inicial do imposto '{nome}' nao encontrada.")
         return situacao
 
     @staticmethod
     def obter_situacao_imposto_sem_irrf() -> SituacaoImposto:
-        situacao = SituacaoImposto.query.filter_by(nome="Sem IRRF").first()
+        nome = get_domain_profile().situacao_imposto_sem_irrf_nome
+        situacao = SituacaoImposto.query.filter_by(nome=nome).first()
         if not situacao:
-            raise ValueError("Situacao do imposto 'Sem IRRF' nao encontrada.")
+            raise ValueError(f"Situacao do imposto '{nome}' nao encontrada.")
         return situacao
 
     @staticmethod

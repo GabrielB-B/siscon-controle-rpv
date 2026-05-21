@@ -1,0 +1,13 @@
+.env
+.git
+.gitignore
+.pytest_cache/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+backups/
+instance/
+htmlcov/
+controle_rpv_runtime/

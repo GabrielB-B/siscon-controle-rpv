@@ -63,12 +63,18 @@
         <div>
             <p class="section-kicker">Tabela limpa</p>
             <h2>Resumo mensal de conferencia REINF</h2>
+            <div class="reinf-conference-review-note">
+                <p class="section-caption">
+                    A 2a conferencia acontece por processo. Abra os detalhes, confira a leitura e marque ou remova quando precisar. O status fica salvo no historico do sistema.
+                </p>
+                <span class="reinf-review-counter" data-reinf-review-summary>{{ conferencia_mensal.resumo_conferencia }}</span>
+            </div>
         </div>
     </div>
 
     {% if conferencia_mensal.tem_dados %}
         <div class="table-wrap">
-            <table class="reinf-table reinf-conference-table">
+            <table class="reinf-table reinf-conference-table" data-reinf-review-scope="{{ filtro_competencia }}">
                 <thead>
                     <tr>
                         <th>Exercicio</th>
@@ -76,18 +82,32 @@
                         <th>CPF/CNPJ</th>
                         <th>Valor base</th>
                         <th>IRRF retido</th>
+                        <th>2a conferencia</th>
                         <th>Detalhar</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for linha in conferencia_mensal.linhas %}
                         {% set detalhe_id = "reinf-mensal-detalhe-" ~ loop.index %}
-                        <tr class="reinf-conference-summary-row">
+                        {% set review_group_key = linha.competencia ~ "|" ~ linha.tipo_documento ~ "|" ~ (linha.documento or "-") ~ "|" ~ linha.beneficiario %}
+                        <tr class="reinf-conference-summary-row{% if linha.todos_processos_conferidos %} is-reviewed{% elif linha.processos_conferidos_parcialmente %} is-partial-reviewed{% endif %}" data-reinf-review-row data-review-group="{{ review_group_key }}">
                             <td>{{ linha.competencia_label }}</td>
                             <td><strong>{{ linha.beneficiario }}</strong></td>
                             <td>{{ linha.documento }}</td>
                             <td>{{ values.render_value(linha.valor_base, 'moeda', 'compact') }}</td>
                             <td>{{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</td>
+                            <td class="reinf-conference-review-cell">
+                                <div
+                                    class="reinf-review-progress-card"
+                                    data-reinf-progress-summary
+                                    data-review-group="{{ review_group_key }}"
+                                    data-total-count="{{ linha.pagamentos|length }}"
+                                    data-review-state="{% if linha.todos_processos_conferidos %}complete{% elif linha.processos_conferidos_parcialmente %}partial{% else %}idle{% endif %}"
+                                >
+                                    <strong data-reinf-progress-count>{{ linha.pagamentos_conferidos }}/{{ linha.pagamentos|length }}</strong>
+                                    <span data-reinf-progress-label>{{ linha.rotulo_progresso_conferencia }}</span>
+                                </div>
+                            </td>
                             <td class="reinf-conference-action-cell">
                                 <button
                                     type="button"
@@ -102,10 +122,10 @@
                                 </button>
                             </td>
                         </tr>
-                        <tr id="{{ detalhe_id }}" class="reinf-conference-detail-row" hidden>
-                            <td colspan="6">
+                        <tr id="{{ detalhe_id }}" class="reinf-conference-detail-row" data-reinf-review-detail data-review-group="{{ review_group_key }}" hidden>
+                            <td colspan="7">
                                 <div class="reinf-conference-detail-panel">
-                                    {{ conferencia.render_conferencia_mensal_painel(linha, values) }}
+                                    {{ conferencia.render_conferencia_mensal_painel(linha, values, review_group_key, url_retorno_atual) }}
                                 </div>
                             </td>
                         </tr>
@@ -114,7 +134,7 @@
                         <td colspan="3"><strong>Total do mes</strong></td>
                         <td><strong>{{ values.render_value(conferencia_mensal.totais.valor_base, 'moeda', 'compact') }}</strong></td>
                         <td><strong>{{ values.render_value(conferencia_mensal.totais.valor_irrf, 'moeda', 'compact') }}</strong></td>
-                        <td><strong>{{ values.render_value(conferencia_mensal.totais.pagamentos, 'numero', 'compact') }} processo(s)</strong></td>
+                        <td colspan="2"><strong>{{ values.render_value(conferencia_mensal.totais.pagamentos, 'numero', 'compact') }} processo(s)</strong></td>
                     </tr>
                 </tbody>
             </table>

@@ -20,6 +20,9 @@
                 <span class="pill">Competencia atual: {{ competencia_atual_legivel }}</span>
                 <span class="pill">RPVs normais criticos: {{ resumo_setor_rpvs.total_quantidade }}</span>
                 <span class="pill">RPVs dativos criticos: {{ resumo_setor_dativos.total_quantidade }}</span>
+                <span class="pill {{ 'pill-success' if pendencias_documentais_setor.sem_pendencias else 'pill-warning' }}">
+                    Documentos fora do fluxo: {{ pendencias_documentais_setor.total_abertas }}
+                </span>
                 <span class="pill">Responsaveis sinalizados: {{ total_responsaveis_sinalizados }}</span>
                 <span class="pill">Alertas criticos de IRRF: {{ total_alertas_irrf }}</span>
             </div>
@@ -75,6 +78,34 @@
                     {% endif %}
                 </article>
             </div>
+
+            <a class="hero-pendency-card {% if pendencias_documentais_setor.sem_pendencias %}is-clear{% endif %}" href="{{ pendencias_documentais_setor.url_setor }}">
+                <div class="hero-pendency-content">
+                    <div class="hero-pendency-head">
+                        <div>
+                            <p class="hero-preview-kicker">Documentos pendentes do setor</p>
+                            <h2 class="hero-pendency-title">{{ pendencias_documentais_setor.titulo }}</h2>
+                        </div>
+                        <span class="hero-pendency-cta">
+                            {{ "Abrir fila do setor" if not pendencias_documentais_setor.sem_pendencias else "Conferir fila" }}
+                        </span>
+                    </div>
+                    <p class="hero-pendency-copy">{{ pendencias_documentais_setor.nota }}</p>
+                    <div class="hero-pendency-value-row">
+                        <span class="hero-pendency-value-label">Valor fora do fluxo</span>
+                        <strong class="hero-pendency-value">R$ {{ pendencias_documentais_setor.total_valor_aberto|moeda_br }}</strong>
+                    </div>
+                </div>
+
+                <div class="hero-pendency-metrics">
+                    {% for item in pendencias_documentais_setor.metricas %}
+                        <span class="hero-pendency-metric {{ item.css_class }}">
+                            <small>{{ item.label }}</small>
+                            <strong>{{ item.valor }}</strong>
+                        </span>
+                    {% endfor %}
+                </div>
+            </a>
         </article>
 
         <article class="card hero-side hero-side-card hero-side-reinf-card">

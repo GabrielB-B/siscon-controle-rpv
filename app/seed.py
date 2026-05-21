@@ -7,140 +7,67 @@ from flask import current_app
 
 from app.extensions import db
 from app.models import User, TipoRPV, SituacaoEmpenho, SituacaoImposto
-
-
-TIPOS_RPV_INICIAIS = [
-    "RPV pessoal",
-    "RPV custeio",
-    "RPV honorários",
-    "RPV periciais",
-    "RPV trabalhista",
-    "RPV federal",
-    "Guia de custas",
-    "Indenização",
-    "Danos Morais",
-    "RPV dativo",
-]
-
-SITUACOES_EMPENHO_INICIAIS = [
-    "Sem Tratamento",
-    "Guias Geradas",
-    "SE Aguardando Aprovação",
-    "SE Aprovada - Gerar NE",
-    "NE Aguardando Assinatura",
-    "VD à Liquidar",
-    "VD Liquidada",
-    "PD em Lote Carregada",
-    "PD Gerada - SEFAZ",
-    "Pagamento - OB Gerada",
-    "Aguardando Assinatura da OB",
-    "Assinado - Levar ao Banco",
-    "Aguardando Retorno Banco",
-    "Pago",
-    "Concluída",
-    "Devolvido",
-    "Cancelado",
-]
-
-SITUACOES_IMPOSTO_INICIAIS = [
-    "Sem Tratamento",
-    "Sem IRRF",
-    "Aguardando PGTO OB Principal",
-    "PD IRRF - Aguardando SEFAZ",
-    "PGTO IRRF - OB Gerada",
-    "Concluída",
-    "Devolvido",
-    "Cancelado",
-]
-
-CORES_EMPENHO = {
-    "Sem Tratamento": "badge-slate",
-    "Guias Geradas": "badge-sky",
-    "SE Aguardando Aprovação": "badge-amber",
-    "SE Aprovada - Gerar NE": "badge-blue",
-    "NE Aguardando Assinatura": "badge-indigo",
-    "VD à Liquidar": "badge-violet",
-    "VD Liquidada": "badge-purple",
-    "PD em Lote Carregada": "badge-cyan",
-    "PD Gerada - SEFAZ": "badge-teal",
-    "Pagamento - OB Gerada": "badge-purple",
-    "Aguardando Assinatura da OB": "badge-amber",
-    "Assinado - Levar ao Banco": "badge-purple",
-    "Aguardando Retorno Banco": "badge-fuchsia",
-    "Pago": "badge-emerald",
-    "Concluída": "badge-green",
-    "Devolvido": "badge-red",
-    "Cancelado": "badge-zinc",
-}
-
-CORES_IMPOSTO = {
-    "Sem Tratamento": "badge-slate",
-    "Sem IRRF": "badge-slate",
-    "Aguardando PGTO OB Principal": "badge-amber",
-    "PD IRRF - Aguardando SEFAZ": "badge-cyan",
-    "PGTO IRRF - OB Gerada": "badge-purple",
-    "Concluída": "badge-green",
-    "Devolvido": "badge-red",
-    "Cancelado": "badge-zinc",
-}
+from app.utils.domain_profile import get_domain_profile
 
 
 def seed_tipos_rpv():
-    for ordem, nome in enumerate(TIPOS_RPV_INICIAIS, start=1):
-        existente = TipoRPV.query.filter_by(nome=nome).first()
+    profile = get_domain_profile()
+
+    for definicao in profile.tipos_rpv:
+        existente = TipoRPV.query.filter_by(nome=definicao.nome).first()
         if existente:
             existente.ativo = True
-            existente.ordem_exibicao = ordem
+            existente.ordem_exibicao = definicao.ordem_exibicao
         else:
             db.session.add(
                 TipoRPV(
-                    nome=nome,
+                    nome=definicao.nome,
                     ativo=True,
-                    ordem_exibicao=ordem,
+                    ordem_exibicao=definicao.ordem_exibicao,
                 )
             )
 
 
 def seed_situacoes_empenho():
-    finais = {"Concluída", "Devolvido", "Cancelado"}
+    profile = get_domain_profile()
 
-    for ordem, nome in enumerate(SITUACOES_EMPENHO_INICIAIS, start=1):
-        existente = SituacaoEmpenho.query.filter_by(nome=nome).first()
+    for definicao in profile.situacoes_empenho:
+        existente = SituacaoEmpenho.query.filter_by(nome=definicao.nome).first()
         if existente:
-            existente.cor_badge = CORES_EMPENHO.get(nome)
-            existente.ordem_fluxo = ordem
-            existente.ativo = True
-            existente.is_final = nome in finais
+            existente.cor_badge = definicao.cor_badge
+            existente.ordem_fluxo = definicao.ordem_fluxo
+            existente.ativo = definicao.ativo
+            existente.is_final = definicao.is_final
         else:
             db.session.add(
                 SituacaoEmpenho(
-                    nome=nome,
-                    cor_badge=CORES_EMPENHO.get(nome),
-                    ordem_fluxo=ordem,
-                    ativo=True,
-                    is_final=nome in finais,
+                    nome=definicao.nome,
+                    cor_badge=definicao.cor_badge,
+                    ordem_fluxo=definicao.ordem_fluxo,
+                    ativo=definicao.ativo,
+                    is_final=definicao.is_final,
                 )
             )
 
 
 def seed_situacoes_imposto():
-    finais = {"Sem IRRF", "Concluída", "Devolvido", "Cancelado"}
+    profile = get_domain_profile()
 
-    for ordem, nome in enumerate(SITUACOES_IMPOSTO_INICIAIS, start=1):
-        existente = SituacaoImposto.query.filter_by(nome=nome).first()
+    for definicao in profile.situacoes_imposto:
+        existente = SituacaoImposto.query.filter_by(nome=definicao.nome).first()
         if existente:
-            existente.cor_badge = CORES_IMPOSTO.get(nome)
-            existente.ordem_fluxo = ordem
-            existente.ativo = True
-            existente.is_final = nome in finais
+            existente.cor_badge = definicao.cor_badge
+            existente.ordem_fluxo = definicao.ordem_fluxo
+            existente.ativo = definicao.ativo
+            existente.is_final = definicao.is_final
         else:
             db.session.add(
                 SituacaoImposto(
-                    nome=nome,
-                    cor_badge=CORES_IMPOSTO.get(nome),
-                    ordem_fluxo=ordem,
-                    ativo=True,
-                    is_final=nome in finais,
+                    nome=definicao.nome,
+                    cor_badge=definicao.cor_badge,
+                    ordem_fluxo=definicao.ordem_fluxo,
+                    ativo=definicao.ativo,
+                    is_final=definicao.is_final,
                 )
             )
 

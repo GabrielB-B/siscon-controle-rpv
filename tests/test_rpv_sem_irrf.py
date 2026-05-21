@@ -34,8 +34,11 @@ from app.observability import init_observability
 from app.routes.auth import auth_bp
 from app.routes.cadastros import cadastros_bp, precisa_alerta_irrf
 from app.routes.dashboard import (
+    _agrupar_beneficiarios_fluxo_bi,
     _cards_bi,
     _coletar_dataset_bi,
+    _exploracao_beneficiarios_fluxo_bi,
+    _filtrar_dataset_bi,
     _query_dativos_bi,
     _query_registros_bi,
     _resumo_grupos_cota,
@@ -54,6 +57,8 @@ from app.services.password_reset_service import PasswordResetService
 from app.security import init_security
 from app.utils.datetime_utils import utc_now_naive
 from app.utils.formatters import formatar_documento_br, moeda_br
+from app.utils.irrf_rules import get_available_irrf_years
+from app.utils.request_meta import get_request_ip
 from app.utils.request_throttle import request_throttle
 
 
@@ -88,7 +93,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
             CSRF_ENABLED=False,
             SQLALCHEMY_DATABASE_URI="sqlite:///:memory:",
             SQLALCHEMY_TRACK_MODIFICATIONS=False,
-            APP_RELEASE_LABEL="Atualizacao Operacional Atlas | Beta interna 2026.03 | Patch 002",
+            APP_RELEASE_LABEL="Atualizacao Operacional Atlas | Beta interna 2026.05 | Patch 003",
             APP_EXTERNAL_URL="https://siscon.local",
             NOTIFICATION_DELIVERY_MODE="file",
             NOTIFICATION_OUTBOX_DIR=self.notification_outbox,
@@ -565,6 +570,21 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertTrue(resultado.sugerir_sem_irrf)
         self.assertTrue(resultado.desconsiderado_limite_minimo)
 
+    def test_calculo_irrf_operacional_informa_anos_disponiveis_quando_ano_nao_existe(self):
+        resultado = calcular_irrf_operacional(
+            competencia="2027-03",
+            valor_bruto_tributavel="6000,00",
+            documento="12345678901",
+            tipo_documento="CPF",
+            sem_irrf_forcado=False,
+        )
+
+        self.assertFalse(resultado.aplicavel)
+        self.assertIn("Anos disponiveis hoje: 2026.", resultado.resumo)
+
+    def test_lista_anos_irrf_disponiveis(self):
+        self.assertEqual(get_available_irrf_years(), (2026,))
+
     def test_calculo_irrf_operacional_nao_aplica_para_cnpj(self):
         resultado = calcular_irrf_operacional(
             competencia="2026-03",
@@ -648,7 +668,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("SISCON", html)
         self.assertIn("RPVs normais", html)
         self.assertIn("RPVs dativos", html)
-        self.assertIn("Patch 002", html)
+        self.assertIn("Patch 003", html)
         self.assertNotIn("Cadastrar RPV", html)
 
     def test_login_exibe_branding_siscon(self):
@@ -672,8 +692,9 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta_identificacao.status_code, 200)
         self.assertIn("Escolha onde receber", html_identificacao)
-        self.assertIn("te***@controle-rpv.local", html_identificacao)
-        self.assertNotIn("Login, email ou telefone", html_identificacao)
+        self.assertIn("Email cadastrado", html_identificacao)
+        self.assertIn("SMS cadastrado", html_identificacao)
+        self.assertNotIn("te***@controle-rpv.local", html_identificacao)
         self.assertEqual(PasswordResetToken.query.count(), 0)
 
         resposta = cliente_anonimo.post(
@@ -684,7 +705,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Codigo registrado na caixa local", html)
+        self.assertIn("Se o login informado estiver ativo", html)
         self.assertIn("Informe o codigo", html)
         self.assertEqual(PasswordResetToken.query.count(), 1)
 
@@ -714,8 +735,10 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html_identificacao = resposta_identificacao.get_data(as_text=True)
 
         self.assertEqual(resposta_identificacao.status_code, 200)
-        self.assertIn("us***@controle-rpv.local", html_identificacao)
-        self.assertIn("(**) *****-6666", html_identificacao)
+        self.assertIn("Email cadastrado", html_identificacao)
+        self.assertIn("SMS cadastrado", html_identificacao)
+        self.assertNotIn("us***@controle-rpv.local", html_identificacao)
+        self.assertNotIn("(**) *****-6666", html_identificacao)
 
         resposta = cliente_anonimo.post(
             "/esqueci-senha",
@@ -754,7 +777,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta_identificacao.status_code, 200)
         self.assertIn("Email cadastrado", html_identificacao)
-        self.assertNotIn("SMS cadastrado", html_identificacao)
+        self.assertIn("SMS cadastrado", html_identificacao)
 
         resposta = cliente_anonimo.post(
             "/esqueci-senha",
@@ -764,7 +787,8 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Escolha um canal cadastrado", html)
+        self.assertIn("Se o login informado estiver ativo", html)
+        self.assertIn("Informe o codigo", html)
         self.assertEqual(PasswordResetToken.query.filter_by(user_id=usuario.id).count(), 0)
         self.assertEqual(len(self._arquivos_notificacao()), 0)
 
@@ -788,9 +812,9 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html_identificacao = resposta_identificacao.get_data(as_text=True)
 
         self.assertEqual(resposta_identificacao.status_code, 200)
+        self.assertIn("Email cadastrado", html_identificacao)
         self.assertIn("SMS cadastrado", html_identificacao)
-        self.assertIn("(**) *****-7777", html_identificacao)
-        self.assertNotIn("Email cadastrado", html_identificacao)
+        self.assertNotIn("(**) *****-7777", html_identificacao)
 
         resposta = cliente_anonimo.post(
             "/esqueci-senha",
@@ -906,7 +930,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Email cadastrado", html)
-        self.assertIn("us***@controle-rpv.local", html)
+        self.assertNotIn("us***@controle-rpv.local", html)
         self.assertNotIn("SMS cadastrado", html)
         self.assertNotIn("(**) *****-2222", html)
 
@@ -921,12 +945,40 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Se o login informado estiver ativo", html)
+        self.assertIn("Escolha onde receber", html)
+        self.assertIn("Email cadastrado", html)
+        self.assertIn("SMS cadastrado", html)
         self.assertIn("Ambiente local", html)
         self.assertEqual(PasswordResetToken.query.count(), 0)
         self.assertEqual(len(self._arquivos_notificacao()), 0)
-        self.assertIn("Continuar", html)
-        self.assertNotIn("Escolha onde receber", html)
+        self.assertNotIn("te***@controle-rpv.local", html)
+
+    def test_esqueci_senha_usuario_inexistente_mantem_fluxo_generico_ate_validacao(self):
+        cliente_anonimo = self.app.test_client()
+        self._identificar_recuperacao(cliente_anonimo, "nao.existe")
+
+        resposta_envio = cliente_anonimo.post(
+            "/esqueci-senha",
+            data={"form_step": "enviar_codigo", "canal_recuperacao": "email"},
+            follow_redirects=True,
+        )
+        html_envio = resposta_envio.get_data(as_text=True)
+
+        self.assertEqual(resposta_envio.status_code, 200)
+        self.assertIn("Se o login informado estiver ativo", html_envio)
+        self.assertIn("Informe o codigo", html_envio)
+        self.assertEqual(PasswordResetToken.query.count(), 0)
+        self.assertEqual(len(self._arquivos_notificacao()), 0)
+
+        resposta_codigo = cliente_anonimo.post(
+            "/redefinir-senha/codigo",
+            data={"codigo": "123456"},
+            follow_redirects=True,
+        )
+        html_codigo = resposta_codigo.get_data(as_text=True)
+
+        self.assertEqual(resposta_codigo.status_code, 200)
+        self.assertIn("Codigo invalido ou expirado", html_codigo)
 
     def test_redefinicao_de_senha_consumo_codigo_e_permitem_novo_login(self):
         cliente_anonimo = self.app.test_client()
@@ -2737,12 +2789,31 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resposta.status_code, 200)
         self.assertEqual(payload["status"], "ok")
         self.assertIn("X-Request-ID", resposta.headers)
+        self.assertNotIn("release_label", payload)
         checks = {check["component"]: check for check in payload["checks"]}
         throttle_check = checks["request_throttle"]
         self.assertEqual(checks["database"]["status"], "ok")
         self.assertEqual(throttle_check["status"], "ok")
         self.assertEqual(throttle_check["backend"], "sqlite")
-        self.assertTrue(throttle_check["storage_path"].endswith("request_throttle.sqlite3"))
+        self.assertNotIn("storage_path", throttle_check)
+        self.assertTrue(all("detail" not in check for check in payload["checks"]))
+
+    def test_request_ip_ignora_x_forwarded_for_por_padrao(self):
+        with self.app.test_request_context(
+            "/login",
+            headers={"X-Forwarded-For": "198.51.100.7"},
+            environ_base={"REMOTE_ADDR": "172.20.10.44"},
+        ):
+            self.assertEqual(get_request_ip(), "172.20.10.44")
+
+    def test_request_ip_confia_em_x_forwarded_for_quando_habilitado(self):
+        self.app.config["TRUST_PROXY_HEADERS"] = True
+        with self.app.test_request_context(
+            "/login",
+            headers={"X-Forwarded-For": "198.51.100.8, 172.20.10.45"},
+            environ_base={"REMOTE_ADDR": "172.20.10.45"},
+        ):
+            self.assertEqual(get_request_ip(), "198.51.100.8")
 
     def test_healthcheck_operacional_admin_retorna_resumo(self):
         resposta = self.client.get("/health/operational")
@@ -3512,6 +3583,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("10/03/2026", html_detalhe)
         self.assertIn("CI-DATIVO-LEGADO", html_lista)
         self.assertIn('name="numero_se"', html_detalhe)
+        self.assertIn('data-draft-key="dativos-item-com-irrf-', html_detalhe)
 
     def test_layout_exibe_rodape_da_atualizacao(self):
         resposta = self.client.get("/rpvs/")
@@ -4240,6 +4312,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resposta_get.status_code, 200)
         self.assertIn('name="data_pagamento"', html_get)
         self.assertIn('name="numero_se"', html_get)
+        self.assertIn('data-draft-key="dativos-lote-sem-irrf-', html_get)
 
         resposta = self.client.post(
             f"/dativos/lotes-sem-irrf/{lote.id}/salvar",
@@ -4668,6 +4741,84 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertTrue(all(item.situacao_rpv_id == situacao_cancelado.id for item in itens_atualizados))
         self.assertTrue(all(item.data_pagamento is None for item in itens_atualizados))
 
+    def test_atualizacao_rapida_lote_preserva_se_quando_formulario_nao_envia_campo(self):
+        _, lote, itens = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-DATIVO-QUICK-SE-LOTE",
+            numero_se="SE-LOTE-PRESERVADA-001",
+            itens=[
+                {
+                    "nome_beneficiario": "Beneficiario Lote Quick",
+                    "valor_bruto": Decimal("1200.00"),
+                }
+            ],
+        )
+
+        resposta = self.client.post(
+            f"/dativos/lotes-sem-irrf/{lote.id}/atualizacao-rapida",
+            data={
+                "nota_empenho": "2026NEQUICKLOTE",
+                "ordem_bancaria": "2026OBQUICKLOTE",
+                "situacao_rpv_id": str(lote.situacao_rpv_id),
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        db.session.expire_all()
+        lote_atualizado = db.session.get(DativoLote, lote.id)
+        itens_atualizados = DativoItem.query.filter_by(dativo_lote_id=lote.id, grupo="sem_irrf").all()
+        self.assertEqual(lote_atualizado.numero_se, "SE-LOTE-PRESERVADA-001")
+        self.assertTrue(all(item.numero_se == "SE-LOTE-PRESERVADA-001" for item in itens_atualizados))
+
+        historico = (
+            HistoricoAlteracao.query.filter_by(
+                entidade_tipo="dativo_lote",
+                entidade_id=lote.id,
+            )
+            .order_by(HistoricoAlteracao.id.desc())
+            .first()
+        )
+        self.assertIsNotNone(historico)
+        alteracoes = json.loads(historico.detalhes_json or "[]")
+        self.assertFalse(any(alteracao.get("campo") == "numero_se" for alteracao in alteracoes))
+
+    def test_atualizacao_rapida_item_preserva_se_quando_formulario_nao_envia_campo(self):
+        _, item = self._criar_item_dativo_com_irrf(
+            processo_edoc="CI-DATIVO-QUICK-SE-ITEM",
+            nome_beneficiario="Beneficiario Item Quick",
+            cpf_original="12345678901",
+            numero_se="SE-ITEM-PRESERVADA-001",
+        )
+
+        resposta = self.client.post(
+            f"/dativos/itens-com-irrf/{item.id}/atualizacao-rapida",
+            data={
+                "nota_empenho": "2026NEQUICKITEM",
+                "ordem_bancaria": "2026OBQUICKITEM",
+                "ob_imposto": "",
+                "situacao_rpv_id": str(item.situacao_rpv_id),
+                "situacao_imposto_id": str(item.situacao_imposto_id),
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        db.session.expire_all()
+        item_atualizado = db.session.get(DativoItem, item.id)
+        self.assertEqual(item_atualizado.numero_se, "SE-ITEM-PRESERVADA-001")
+
+        historicos = (
+            HistoricoAlteracao.query.filter_by(
+                entidade_tipo="dativo_item",
+                entidade_id=item.id,
+            )
+            .order_by(HistoricoAlteracao.id.desc())
+            .all()
+        )
+        for historico in historicos:
+            alteracoes = json.loads(historico.detalhes_json or "[]")
+            self.assertFalse(any(alteracao.get("campo") == "numero_se" for alteracao in alteracoes))
+
     def test_item_com_irrf_exige_confirmacao_para_data_pagamento_manual(self):
         situacao_pago = SituacaoEmpenho(
             nome="Pago",
@@ -5044,6 +5195,81 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("Pendencias documentais", html)
         self.assertIn("Abrir pendencias", html)
 
+    def test_dashboard_home_destaca_pendencias_documentais_do_setor_na_hero(self):
+        usuario_secundario = User(
+            nome="Equipe Pendencias",
+            login="equipe.pendencias.dashboard",
+            email="equipe.pendencias.dashboard@controle-rpv.local",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_secundario.set_password("Senha1234")
+        db.session.add(usuario_secundario)
+        db.session.commit()
+
+        pendencia_minha = RPVPendenciaDocumento(
+            exercicio="2026-03",
+            processo_edoc="CI-HERO-PEND-UM",
+            numero_processo="PROC-HERO-PEND-UM",
+            data_ci=date(2026, 3, 20),
+            tipo_rpv_id=self.tipo_honorarios_id,
+            responsavel_id=self.user_id,
+            nome_beneficiario="Pendencia Hero Um",
+            nome_beneficiario_normalizado="",
+            tipo_documento="CPF",
+            documento_original="",
+            documento_normalizado="",
+            valor_bruto=Decimal("1800.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            observacoes=None,
+            motivo_pendencia="",
+            status="aberta",
+            criado_por_id=self.user_id,
+            atualizado_por_id=self.user_id,
+        )
+        pendencia_minha.atualizar_campos_derivados()
+
+        pendencia_setor = RPVPendenciaDocumento(
+            exercicio="2026-03",
+            processo_edoc="CI-HERO-PEND-DOIS",
+            numero_processo="PROC-HERO-PEND-DOIS",
+            data_ci=date(2026, 3, 21),
+            tipo_rpv_id=self.tipo_honorarios_id,
+            responsavel_id=usuario_secundario.id,
+            nome_beneficiario="Pendencia Hero Dois",
+            nome_beneficiario_normalizado="",
+            tipo_documento="CPF",
+            documento_original="52998224725",
+            documento_normalizado="",
+            valor_bruto=Decimal("3200.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            observacoes=None,
+            motivo_pendencia="",
+            status="aberta",
+            criado_por_id=usuario_secundario.id,
+            atualizado_por_id=usuario_secundario.id,
+        )
+        pendencia_setor.atualizar_campos_derivados()
+
+        db.session.add_all([pendencia_minha, pendencia_setor])
+        db.session.commit()
+
+        resposta = self.client.get("/")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Documentos fora do fluxo: 2", html)
+        self.assertIn("Documentos pendentes do setor", html)
+        self.assertIn("2 documento(s) fora do fluxo oficial", html)
+        self.assertIn("Prontas para oficializar", html)
+        self.assertIn("Sem CPF/CNPJ", html)
+        self.assertIn("Na sua fila", html)
+        self.assertIn("R$ 5.000,00", html)
+        self.assertIn("responsavel=todos", html)
+        self.assertIn("status=aberta", html)
+
     def test_dashboard_nao_alerta_dativo_sem_irrf_pelo_total_do_lote(self):
         self._criar_dativo_sem_irrf(
             itens=[
@@ -5338,7 +5564,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta.status_code, 200)
         self.assertIn("Situacao de pagamento", html)
-        self.assertIn("Maiores volumes por responsavel", html)
+        self.assertIn("Registros por responsavel", html)
         self.assertIn("Grupo de cota", html)
         self.assertIn("BI Meu Pago", html)
         self.assertIn("12345678901", html)
@@ -5454,14 +5680,19 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Janela modular dos graficos", html)
+        self.assertIn("Janela dos graficos", html)
+        self.assertNotIn("<h2>Janela modular dos graficos</h2>", html)
         self.assertIn("IRRF retido por mes", html)
         self.assertIn("Leitura executiva do IRRF", html)
         self.assertIn("O que ainda pede tratamento no recorte", html)
         self.assertIn("Dativos dentro do grupo comum", html)
         self.assertIn("Top beneficiarios pagos com separacao fiscal", html)
         self.assertIn("Origem e leitura dos dados", html)
-        self.assertIn("Leitura principal do BI", html)
+        self.assertIn("O que este BI esta mostrando", html)
+        self.assertIn("Fluxo do recorte", html)
+        self.assertIn("Sinais operacionais do ciclo", html)
+        self.assertNotIn("Indicadores complementares", html)
+        self.assertNotIn("<span>Total na janela</span>", html)
 
     def test_bi_conferencia_exibe_totais_mensais_e_total_geral(self):
         tipo_pericial = TipoRPV(nome="RPV periciais", ativo=True, ordem_exibicao=4)
@@ -5813,6 +6044,151 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("IRRF retido:", html)
         self.assertIn("120,00", html)
         self.assertIn("80,00", html)
+
+    def test_bi_top_beneficiarios_explora_ranking_em_paginas_sem_limite_fixo(self):
+        for indice in range(1, 30):
+            self._criar_rpv(
+                nome_beneficiario=f"Beneficiario Expandido {indice}",
+                documento_original=f"{indice:011d}",
+                valor_bruto=Decimal(str(10000 - (indice * 100))),
+                valor_irrf=None,
+                sem_irrf=True,
+                data_pagamento=date(2026, 3, min(10 + indice, 28)),
+                exercicio="2026-03",
+            )
+
+        filtros = {
+            "competencia_inicial": "2026-03",
+            "competencia_final": "2026-03",
+            "pagamento": "pagos",
+        }
+
+        with self.app.test_request_context("/bi"):
+            dataset = _filtrar_dataset_bi(_coletar_dataset_bi(filtros), filtros)
+            serie_beneficiarios = _agrupar_beneficiarios_fluxo_bi(dataset)
+            exploracao_pagina_1 = _exploracao_beneficiarios_fluxo_bi(
+                serie_beneficiarios,
+                busca="",
+                pagina=1,
+            )
+            exploracao_pagina_2 = _exploracao_beneficiarios_fluxo_bi(
+                serie_beneficiarios,
+                busca="",
+                pagina=2,
+            )
+
+        self.assertEqual(exploracao_pagina_1["total_geral"], 29)
+        self.assertEqual(exploracao_pagina_1["pagina"], 1)
+        self.assertEqual(exploracao_pagina_1["total_paginas"], 2)
+        self.assertEqual(exploracao_pagina_1["inicio_ordem"], 6)
+        self.assertEqual(exploracao_pagina_1["fim_ordem"], 25)
+        self.assertIn("Beneficiario Expandido 6", [item["label"] for item in exploracao_pagina_1["itens"]])
+        self.assertIn("Beneficiario Expandido 25", [item["label"] for item in exploracao_pagina_1["itens"]])
+        self.assertNotIn("Beneficiario Expandido 26", [item["label"] for item in exploracao_pagina_1["itens"]])
+
+        self.assertEqual(exploracao_pagina_2["pagina"], 2)
+        self.assertEqual(exploracao_pagina_2["inicio_ordem"], 26)
+        self.assertEqual(exploracao_pagina_2["fim_ordem"], 29)
+        self.assertIn("Beneficiario Expandido 26", [item["label"] for item in exploracao_pagina_2["itens"]])
+        self.assertIn("Beneficiario Expandido 29", [item["label"] for item in exploracao_pagina_2["itens"]])
+
+    def test_bi_top_beneficiarios_pesquisa_por_nome_ou_documento_no_recorte(self):
+        self._criar_rpv(
+            nome_beneficiario="Helena Sobral Pesquisa",
+            documento_original="11122233344",
+            valor_bruto=Decimal("8300.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 3, 11),
+            exercicio="2026-03",
+        )
+        self._criar_rpv(
+            nome_beneficiario="Carlos Ribeiro Pesquisa",
+            documento_original="99988877766",
+            valor_bruto=Decimal("6200.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 3, 12),
+            exercicio="2026-03",
+        )
+
+        filtros = {
+            "competencia_inicial": "2026-03",
+            "competencia_final": "2026-03",
+            "pagamento": "pagos",
+        }
+
+        with self.app.test_request_context("/bi"):
+            dataset = _filtrar_dataset_bi(_coletar_dataset_bi(filtros), filtros)
+            serie_beneficiarios = _agrupar_beneficiarios_fluxo_bi(dataset)
+            exploracao = _exploracao_beneficiarios_fluxo_bi(
+                serie_beneficiarios,
+                busca="11122233344",
+                pagina=1,
+            )
+
+        self.assertTrue(exploracao["busca_ativa"])
+        self.assertEqual(exploracao["total_resultados"], 1)
+        self.assertEqual([item["label"] for item in exploracao["itens"]], ["Helena Sobral Pesquisa"])
+
+    def test_bi_principal_abre_beneficiarios_em_pagina_dedicada(self):
+        for indice in range(1, 8):
+            self._criar_rpv(
+                nome_beneficiario=f"Beneficiario BI Limpo {indice}",
+                documento_original=f"6000000000{indice}",
+                valor_bruto=Decimal(str(9000 - indice)),
+                valor_irrf=None,
+                sem_irrf=True,
+                data_pagamento=date(2026, 3, min(10 + indice, 28)),
+                exercicio="2026-03",
+            )
+
+        resposta = self.client.get(
+            "/bi?pagamento=pagos&competencia_inicial=2026-03&competencia_final=2026-03"
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Ver beneficiarios", html)
+        self.assertIn("/bi/beneficiarios", html)
+        self.assertNotIn("Mostrar mais beneficiarios do recorte", html)
+        self.assertNotIn("Proximos 20", html)
+
+    def test_bi_beneficiarios_filtra_retencao_sem_gravar_observacoes(self):
+        registro_com_irrf = self._criar_rpv(
+            nome_beneficiario="Beneficiario Retencao Dedicada",
+            documento_original="11122233344",
+            valor_bruto=Decimal("8300.00"),
+            valor_irrf=Decimal("830.00"),
+            sem_irrf=False,
+            data_pagamento=date(2026, 3, 11),
+            exercicio="2026-03",
+        )
+        registro_sem_irrf = self._criar_rpv(
+            nome_beneficiario="Beneficiario Sem Retencao Dedicada",
+            documento_original="99988877766",
+            valor_bruto=Decimal("6200.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 3, 12),
+            exercicio="2026-03",
+        )
+
+        resposta = self.client.get(
+            "/bi/beneficiarios?pagamento=pagos&competencia_inicial=2026-03"
+            "&competencia_final=2026-03&fiscal=com_retencao"
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Beneficiario Retencao Dedicada", html)
+        self.assertIn("Teve imposto retido no recorte", html)
+        self.assertNotIn("Beneficiario Sem Retencao Dedicada", html)
+
+        db.session.refresh(registro_com_irrf)
+        db.session.refresh(registro_sem_irrf)
+        self.assertIsNone(registro_com_irrf.observacoes)
+        self.assertIsNone(registro_sem_irrf.observacoes)
 
     def test_bi_conferencia_remove_bloco_fiscal_detalhado_e_mantem_resumo_contabil(self):
         self._criar_rpv(
@@ -6373,6 +6749,54 @@ class RPVSemIRRFTestCase(unittest.TestCase):
             )
         )
 
+    def test_edicao_item_lote_preserva_data_pagamento_existente(self):
+        _, lote, itens = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-DATA-LOTE",
+            itens=[
+                {
+                    "nome_beneficiario": "Beneficiario com data existente",
+                    "cpf_original": "50734299000186",
+                    "numero_processo": "PROC-DATA-LOTE",
+                    "valor_bruto": Decimal("5855.02"),
+                    "data_pagamento": date(2026, 3, 1),
+                }
+            ],
+        )
+        item = itens[0]
+        lote.data_pagamento = date(2026, 3, 1)
+        db.session.commit()
+
+        resposta = self.client.post(
+            f"/dativos/lotes-sem-irrf/{lote.id}/item/{item.id}/editar",
+            data={
+                "nome_beneficiario": item.nome_beneficiario,
+                "cpf_original": item.cpf_original,
+                "numero_processo": item.numero_processo,
+                "valor_bruto": "5855,02",
+                "dispensa_irrf_confirmada": "1",
+                "confirmar_processo_existente": "0",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        item_atualizado = db.session.get(DativoItem, item.id)
+        self.assertEqual(item_atualizado.data_pagamento, date(2026, 3, 1))
+        self.assertTrue(item_atualizado.dispensa_irrf_confirmada)
+
+        evento = (
+            HistoricoAlteracao.query.filter_by(
+                entidade_tipo="dativo_item",
+                entidade_id=item.id,
+            )
+            .order_by(HistoricoAlteracao.id.desc())
+            .first()
+        )
+        self.assertIsNotNone(evento)
+        self.assertFalse(
+            any(alteracao["campo"] == "data_pagamento" for alteracao in evento.alteracoes)
+        )
+
     def test_edicao_item_lote_salva_observacoes(self):
         _, lote, itens = self._criar_dativo_sem_irrf(
             processo_edoc="CI-OBS-EDICAO",
@@ -6834,14 +7258,152 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("março/2026", html)
         self.assertIn("5.200,00", html)
         self.assertIn("520,00", html)
+        self.assertIn("Nenhum processo conferido", html)
+        self.assertIn("0/2", html)
+        self.assertIn("Por conferir", html)
+        self.assertIn("Marcar", html)
         self.assertIn("Ver processos", html)
         self.assertIn("Valor bruto", html)
         self.assertIn("Liquido", html)
+        self.assertIn("data-reinf-progress-summary", html)
+        self.assertIn("data-reinf-review-toggle", html)
+        self.assertIn("este processo", html)
+        self.assertIn("/reinf/marcar-conferencia-processo", html)
         self.assertIn("PROC-CONF-MENSAL-2", html)
         self.assertNotIn("Abrir", html)
         self.assertNotIn("Nao Deve Entrar", html)
         self.assertNotIn("Atualizar selecionados", html)
         self.assertNotIn("Status REINF", html)
+
+    def test_reinf_conferencia_mensal_persiste_processo_conferido_no_historico(self):
+        registro = self._criar_rpv(
+            nome_beneficiario="Conferencia Persistida",
+            documento_original="12345678901",
+            valor_bruto=Decimal("3000.00"),
+            valor_irrf=Decimal("300.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 10),
+        )
+        _, item_irrf = self._criar_item_dativo_com_irrf(
+            processo_edoc="CI-CONF-PERSISTIDA",
+            nome_beneficiario="Conferencia Persistida",
+            cpf_original="12345678901",
+            numero_processo="PROC-CONF-PERSISTIDA-2",
+            valor_bruto=Decimal("2200.00"),
+            valor_irrf=Decimal("220.00"),
+        )
+        item_irrf.data_pagamento = date(2026, 3, 21)
+        db.session.commit()
+
+        resposta = self.client.post(
+            "/reinf/marcar-conferencia-processo",
+            data={
+                "origem": "rpv",
+                "registro_id": str(registro.id),
+                "revisado": "1",
+                "retorno": "/reinf/?visao=conferencia_mensal&competencia=2026-03",
+            },
+            headers={
+                "Accept": "application/json",
+                "X-Requested-With": "fetch",
+            },
+            follow_redirects=False,
+        )
+        payload = resposta.get_json()
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["created"])
+        self.assertTrue(payload["reviewed"])
+        self.assertIn("Conferido por", payload["reviewed_meta"])
+
+        eventos = (
+            HistoricoAlteracao.query.filter_by(
+                entidade_tipo="registro_rpv",
+                entidade_id=registro.id,
+                acao="Conferencia REINF mensal",
+            )
+            .order_by(HistoricoAlteracao.id.asc())
+            .all()
+        )
+        self.assertEqual(len(eventos), 1)
+
+        resposta_repetida = self.client.post(
+            "/reinf/marcar-conferencia-processo",
+            data={
+                "origem": "rpv",
+                "registro_id": str(registro.id),
+                "revisado": "1",
+                "retorno": "/reinf/?visao=conferencia_mensal&competencia=2026-03",
+            },
+            headers={
+                "Accept": "application/json",
+                "X-Requested-With": "fetch",
+            },
+            follow_redirects=False,
+        )
+        payload_repetido = resposta_repetida.get_json()
+
+        self.assertEqual(resposta_repetida.status_code, 200)
+        self.assertTrue(payload_repetido["ok"])
+        self.assertFalse(payload_repetido["created"])
+        self.assertTrue(payload_repetido["reviewed"])
+        self.assertEqual(
+            HistoricoAlteracao.query.filter_by(
+                entidade_tipo="registro_rpv",
+                entidade_id=registro.id,
+                acao="Conferencia REINF mensal",
+            ).count(),
+            1,
+        )
+
+        resposta_html = self.client.get("/reinf/?visao=conferencia_mensal&competencia=2026-03")
+        html = resposta_html.get_data(as_text=True)
+
+        self.assertEqual(resposta_html.status_code, 200)
+        self.assertIn("1 de 2 processo(s) conferido(s)", html)
+        self.assertIn("1/2", html)
+        self.assertIn("processos conferidos", html)
+        self.assertIn("Conferido por", html)
+
+        resposta_desmarcar = self.client.post(
+            "/reinf/marcar-conferencia-processo",
+            data={
+                "origem": "rpv",
+                "registro_id": str(registro.id),
+                "revisado": "0",
+                "retorno": "/reinf/?visao=conferencia_mensal&competencia=2026-03",
+            },
+            headers={
+                "Accept": "application/json",
+                "X-Requested-With": "fetch",
+            },
+            follow_redirects=False,
+        )
+        payload_desmarcado = resposta_desmarcar.get_json()
+
+        self.assertEqual(resposta_desmarcar.status_code, 200)
+        self.assertTrue(payload_desmarcado["ok"])
+        self.assertTrue(payload_desmarcado["created"])
+        self.assertFalse(payload_desmarcado["reviewed"])
+        self.assertEqual(
+            HistoricoAlteracao.query.filter_by(
+                entidade_tipo="registro_rpv",
+                entidade_id=registro.id,
+                acao="Conferencia REINF mensal",
+            ).count(),
+            2,
+        )
+
+        resposta_html_desmarcada = self.client.get("/reinf/?visao=conferencia_mensal&competencia=2026-03")
+        html_desmarcado = resposta_html_desmarcada.get_data(as_text=True)
+
+        self.assertEqual(resposta_html_desmarcada.status_code, 200)
+        self.assertIn("Nenhum processo conferido", html_desmarcado)
+        self.assertIn("0/2", html_desmarcado)
+        self.assertIn("Por conferir", html_desmarcado)
+        self.assertNotIn("Conferido por", html_desmarcado)
 
     def test_reinf_conferencia_anual_exibe_total_do_ano_e_detalhamento_por_exercicio(self):
         self._criar_rpv(
@@ -7278,6 +7840,7 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertEqual(resposta_edicao.status_code, 200)
         self.assertIn('name="numero_se"', html_edicao)
+        self.assertIn('data-draft-key="cadastros-editar-rpv-', html_edicao)
         self.assertNotIn('name="reinf_status"', html_edicao)
         self.assertIn("Atualize esse status somente na aba REINF mensal.", html_edicao)
         self.assertIn("Concluído", html_edicao)

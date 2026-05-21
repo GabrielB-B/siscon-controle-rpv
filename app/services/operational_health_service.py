@@ -94,14 +94,17 @@ def _status_from_issues(issues: list[dict]) -> str:
     return severidade_maxima["severity"]
 
 
-def collect_health_snapshot() -> dict:
+def collect_health_snapshot(*, public: bool = True) -> dict:
     checks = []
 
     try:
         db.session.execute(text("SELECT 1"))
         checks.append({"component": "database", "status": "ok"})
     except Exception as exc:
-        checks.append({"component": "database", "status": "error", "detail": str(exc)})
+        database_check = {"component": "database", "status": "error"}
+        if not public:
+            database_check["detail"] = str(exc)
+        checks.append(database_check)
 
     instance_path = Path(current_app.instance_path)
     checks.append(
@@ -121,7 +124,10 @@ def collect_health_snapshot() -> dict:
         notification_dir.mkdir(parents=True, exist_ok=True)
         checks.append({"component": "notifications", "status": "ok"})
     except Exception as exc:
-        checks.append({"component": "notifications", "status": "error", "detail": str(exc)})
+        notification_check = {"component": "notifications", "status": "error"}
+        if not public:
+            notification_check["detail"] = str(exc)
+        checks.append(notification_check)
 
     throttle_backend = str(current_app.config.get("REQUEST_THROTTLE_BACKEND") or "sqlite").strip().lower()
     throttle_check = {
@@ -129,7 +135,7 @@ def collect_health_snapshot() -> dict:
         "status": "ok",
         "backend": throttle_backend,
     }
-    if throttle_backend == "sqlite":
+    if throttle_backend == "sqlite" and not public:
         throttle_path = Path(
             str(
                 current_app.config.get("REQUEST_THROTTLE_STORAGE_PATH")
@@ -159,9 +165,15 @@ def collect_health_snapshot() -> dict:
             log_dir.mkdir(parents=True, exist_ok=True)
             checks.append({"component": "file_logging", "status": "ok"})
         except Exception as exc:
-            checks.append({"component": "file_logging", "status": "error", "detail": str(exc)})
+            logging_check = {"component": "file_logging", "status": "error"}
+            if not public:
+                logging_check["detail"] = str(exc)
+            checks.append(logging_check)
     else:
-        checks.append({"component": "file_logging", "status": "info", "detail": "disabled"})
+        logging_check = {"component": "file_logging", "status": "info"}
+        if not public:
+            logging_check["detail"] = "disabled"
+        checks.append(logging_check)
 
     overall_status = "ok"
     if any(check["status"] == "error" for check in checks):
@@ -169,12 +181,14 @@ def collect_health_snapshot() -> dict:
     elif any(check["status"] == "warning" for check in checks):
         overall_status = "warning"
 
-    return {
+    payload = {
         "status": overall_status,
         "generated_at": _utc_iso_now(),
-        "release_label": current_app.config.get("APP_RELEASE_LABEL", ""),
         "checks": checks,
     }
+    if not public:
+        payload["release_label"] = current_app.config.get("APP_RELEASE_LABEL", "")
+    return payload
 
 
 def _comparar_lotes_sem_irrf() -> list[dict]:

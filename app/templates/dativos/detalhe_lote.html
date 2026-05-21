@@ -86,6 +86,8 @@
     <form
         method="POST"
         action="{{ url_for('dativos.salvar_lote_sem_irrf', lote_id=lote.id, retorno=url_retorno) }}"
+        data-draft-key="dativos-lote-sem-irrf-{{ lote.id }}"
+        data-draft-label="O andamento deste lote"
         data-payment-date-confirm="true"
         data-payment-date-title="Confirmar data manual de pagamento"
         data-payment-date-message="Voce alterou manualmente a data do pagamento. BI e competencia operacional passarao a seguir essa data. Deseja continuar?"

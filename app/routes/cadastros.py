@@ -24,6 +24,7 @@ from app.services.payment_reference_service import (
     validar_referencias_pagamento_principal,
 )
 from app.services.processo_crosscheck_service import ProcessoCrosscheckService
+from app.utils.domain_profile import get_domain_profile
 from app.utils.normalizers import normalizar_documento, normalizar_numero_processo
 from app.utils.datetime_utils import utc_now_naive
 from app.utils.documentos import validar_documento_brasileiro
@@ -149,9 +150,10 @@ def _registrar_historico_rpv(
 
 
 def obter_situacao_empenho_inicial():
-    situacao = SituacaoEmpenho.query.filter_by(nome="Sem Tratamento", ativo=True).first()
+    nome = get_domain_profile().situacao_empenho_inicial_nome
+    situacao = SituacaoEmpenho.query.filter_by(nome=nome, ativo=True).first()
     if not situacao:
-        raise ValueError("Situação inicial do RPV 'Sem Tratamento' não encontrada.")
+        raise ValueError(f"Situação inicial do RPV '{nome}' não encontrada.")
     return situacao
 
 
@@ -163,27 +165,34 @@ def obter_situacao_imposto_por_nome(nome: str):
 
 
 def situacao_imposto_eh_sem_irrf(situacao: SituacaoImposto | None) -> bool:
-    return str(getattr(situacao, "nome", "") or "").strip().casefold() == "sem irrf"
+    nome_sem_irrf = get_domain_profile().situacao_imposto_sem_irrf_nome
+    return str(getattr(situacao, "nome", "") or "").strip().casefold() == nome_sem_irrf.casefold()
 
 
 def obter_situacao_imposto_inicial(sem_irrf: bool = False):
-    nome = "Sem IRRF" if sem_irrf else "Sem Tratamento"
+    profile = get_domain_profile()
+    nome = (
+        profile.situacao_imposto_sem_irrf_nome
+        if sem_irrf
+        else profile.situacao_imposto_inicial_nome
+    )
     return obter_situacao_imposto_por_nome(nome)
 
 
 def resolver_situacao_imposto_rpv(sem_irrf: bool, situacao_imposto_id: int | None = None):
+    profile = get_domain_profile()
     if sem_irrf:
-        return obter_situacao_imposto_por_nome("Sem IRRF")
+        return obter_situacao_imposto_por_nome(profile.situacao_imposto_sem_irrf_nome)
 
     if situacao_imposto_id is None:
-        return obter_situacao_imposto_por_nome("Sem Tratamento")
+        return obter_situacao_imposto_por_nome(profile.situacao_imposto_inicial_nome)
 
     situacao = db.session.get(SituacaoImposto, int(situacao_imposto_id))
     if not situacao or not situacao.ativo:
         raise ValueError("Situação do imposto inválida.")
 
     if situacao_imposto_eh_sem_irrf(situacao):
-        return obter_situacao_imposto_por_nome("Sem Tratamento")
+        return obter_situacao_imposto_por_nome(profile.situacao_imposto_inicial_nome)
 
     return situacao
 

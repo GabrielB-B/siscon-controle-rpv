@@ -21,6 +21,7 @@ from app.models import (
     User,
 )
 from app.services.audit_service import registrar_evento, snapshot_entidade
+from app.utils.domain_profile import get_domain_profile
 from app.utils.documentos import validar_documento_brasileiro
 from app.utils.normalizers import (
     normalizar_documento,
@@ -176,29 +177,30 @@ def _mapear_elaborador(raw: str | None) -> tuple[str | None, str | None]:
 
 
 def _mapear_tipo(raw: str | None) -> tuple[str | None, str | None]:
+    profile = get_domain_profile()
     mapa = {
-        "CUSTEIO": "RPV custeio",
-        "RPV_CUSTEIO": "RPV custeio",
-        "HONORARIOS": "RPV honorários",
-        "RPV-HONORARIOS": "RPV honorários",
-        "RPV-PESSOAL": "RPV pessoal",
-        "PESSOAL": "RPV pessoal",
-        "TRABALHISTA": "RPV trabalhista",
-        "RPV-TRABALHISTA": "RPV trabalhista",
-        "RPV -TRABALHISTA": "RPV trabalhista",
-        "PERICIAL": "RPV periciais",
-        "PERICIAIS": "RPV periciais",
-        "RPV-PERICIAL": "RPV periciais",
-        "RPV-PERICIAIS": "RPV periciais",
-        "RPV - PERICIAIS": "RPV periciais",
-        "RPV-FEDERAL": "RPV federal",
-        "GUIA-DE-CUSTAS": "Guia de custas",
-        "INDENIZACAO": "Indenização",
-        "RPV - INDENIZACAO": "Indenização",
-        "RPV-DANOS MORAIS": "Danos Morais",
-        "RPV - DANOS MORAIS": "Danos Morais",
-        "RPV_DANOS_MORAIS": "Danos Morais",
-        "DANOS MORAIS": "Danos Morais",
+        "CUSTEIO": profile.tipo_rpv_name("rpv_custeio"),
+        "RPV_CUSTEIO": profile.tipo_rpv_name("rpv_custeio"),
+        "HONORARIOS": profile.tipo_rpv_name("rpv_honorarios"),
+        "RPV-HONORARIOS": profile.tipo_rpv_name("rpv_honorarios"),
+        "RPV-PESSOAL": profile.tipo_rpv_name("rpv_pessoal"),
+        "PESSOAL": profile.tipo_rpv_name("rpv_pessoal"),
+        "TRABALHISTA": profile.tipo_rpv_name("rpv_trabalhista"),
+        "RPV-TRABALHISTA": profile.tipo_rpv_name("rpv_trabalhista"),
+        "RPV -TRABALHISTA": profile.tipo_rpv_name("rpv_trabalhista"),
+        "PERICIAL": profile.tipo_rpv_name("rpv_periciais"),
+        "PERICIAIS": profile.tipo_rpv_name("rpv_periciais"),
+        "RPV-PERICIAL": profile.tipo_rpv_name("rpv_periciais"),
+        "RPV-PERICIAIS": profile.tipo_rpv_name("rpv_periciais"),
+        "RPV - PERICIAIS": profile.tipo_rpv_name("rpv_periciais"),
+        "RPV-FEDERAL": profile.tipo_rpv_name("rpv_federal"),
+        "GUIA-DE-CUSTAS": profile.tipo_rpv_name("guia_custas"),
+        "INDENIZACAO": profile.tipo_rpv_name("indenizacao"),
+        "RPV - INDENIZACAO": profile.tipo_rpv_name("indenizacao"),
+        "RPV-DANOS MORAIS": profile.tipo_rpv_name("danos_morais"),
+        "RPV - DANOS MORAIS": profile.tipo_rpv_name("danos_morais"),
+        "RPV_DANOS_MORAIS": profile.tipo_rpv_name("danos_morais"),
+        "DANOS MORAIS": profile.tipo_rpv_name("danos_morais"),
     }
     chave = _nk(raw)
     destino = mapa.get(chave)
@@ -208,22 +210,23 @@ def _mapear_tipo(raw: str | None) -> tuple[str | None, str | None]:
 
 
 def _mapear_situacao_empenho(raw: str | None) -> tuple[str | None, str | None]:
+    profile = get_domain_profile()
     mapa = {
-        "CONCLUIDA": "Concluída",
-        "PAGO": "Pago",
-        "PD GERADA - SEFAZ": "PD Gerada - SEFAZ",
-        "AGUARDANDO RETORNO BANCO": "Aguardando Retorno Banco",
-        "SE AGUARDANDO APROVACAO": "SE Aguardando Aprovação",
-        "GUIAS GERADAS": "Guias Geradas",
-        "VD  A LIQUIDAR": "VD à Liquidar",
-        "VD A LIQUIDAR": "VD à Liquidar",
-        "AGUARDANDO ASSINATURA DA OB": "Aguardando Assinatura da OB",
+        "CONCLUIDA": profile.situacao_empenho_name("concluida"),
+        "PAGO": profile.situacao_empenho_name("pago"),
+        "PD GERADA - SEFAZ": profile.situacao_empenho_name("pd_gerada_sefaz"),
+        "AGUARDANDO RETORNO BANCO": profile.situacao_empenho_name("aguardando_retorno_banco"),
+        "SE AGUARDANDO APROVACAO": profile.situacao_empenho_name("se_aguardando_aprovacao"),
+        "GUIAS GERADAS": profile.situacao_empenho_name("guias_geradas"),
+        "VD  A LIQUIDAR": profile.situacao_empenho_name("vd_a_liquidar"),
+        "VD A LIQUIDAR": profile.situacao_empenho_name("vd_a_liquidar"),
+        "AGUARDANDO ASSINATURA DA OB": profile.situacao_empenho_name("aguardando_assinatura_ob"),
     }
     chave = _nk_compacto(raw)
     if not chave:
         return None, "Situação de empenho ausente"
     if chave == "VD LIQUIDADA":
-        return "VD Liquidada", None
+        return profile.situacao_empenho_name("vd_liquidada"), None
     destino = mapa.get(chave)
     if destino:
         return destino, None
@@ -235,18 +238,19 @@ def _mapear_situacao_empenho(raw: str | None) -> tuple[str | None, str | None]:
 
 
 def _inferir_sem_irrf(situacao_imposto_raw: str | None, imposto_raw) -> bool:
-    if _nk(situacao_imposto_raw) == "SEM IRRF":
+    if _nk(situacao_imposto_raw) == _nk(get_domain_profile().situacao_imposto_sem_irrf_nome):
         return True
     imposto = _decimal_planilha(imposto_raw)
     return isinstance(imposto, str) and imposto.casefold() in {"s/if", "sif"}
 
 
 def _mapear_situacao_imposto(raw: str | None, *, sem_irrf: bool, valor_irrf) -> tuple[str | None, str | None]:
+    profile = get_domain_profile()
     mapa = {
-        "SEM IRRF": "Sem IRRF",
-        "AGUARDANDO PGTO OB PRINCIPAL": "Aguardando PGTO OB Principal",
-        "CONCLUIDA": "Concluída",
-        "PD IRRF - AGUARDANDO SEFAZ": "PD IRRF - Aguardando SEFAZ",
+        "SEM IRRF": profile.situacao_imposto_name("sem_irrf"),
+        "AGUARDANDO PGTO OB PRINCIPAL": profile.situacao_imposto_name("aguardando_pgto_ob_principal"),
+        "CONCLUIDA": profile.situacao_imposto_name("concluida"),
+        "PD IRRF - AGUARDANDO SEFAZ": profile.situacao_imposto_name("pd_irrf_aguardando_sefaz"),
     }
     chave = _nk(raw)
     if chave:
@@ -256,7 +260,7 @@ def _mapear_situacao_imposto(raw: str | None, *, sem_irrf: bool, valor_irrf) -> 
         return destino, None
 
     if sem_irrf:
-        return "Sem IRRF", None
+        return profile.situacao_imposto_name("sem_irrf"), None
 
     if valor_irrf is not None:
         return None, "Situação de imposto ausente com IRRF informado"

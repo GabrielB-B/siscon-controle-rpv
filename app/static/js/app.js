@@ -1267,6 +1267,340 @@ function bindSavedFilters() {
     });
 }
 
+function isDraftFieldEligible(field) {
+    if (!field || !field.name || field.disabled || field.hasAttribute("data-draft-ignore")) {
+        return false;
+    }
+
+    const type = String(field.type || "").toLowerCase();
+    return !["hidden", "submit", "button", "reset", "image", "file"].includes(type);
+}
+
+function normalizeDraftPayload(payload) {
+    const normalized = {};
+
+    Object.keys(payload || {})
+        .sort()
+        .forEach((name) => {
+            const value = payload[name];
+            if (Array.isArray(value)) {
+                normalized[name] = value.map((item) => String(item ?? "")).sort();
+                return;
+            }
+
+            normalized[name] = String(value ?? "").trim();
+        });
+
+    return normalized;
+}
+
+function areDraftPayloadsEqual(leftPayload, rightPayload) {
+    return JSON.stringify(normalizeDraftPayload(leftPayload))
+        === JSON.stringify(normalizeDraftPayload(rightPayload));
+}
+
+function serializeDraftForm(form) {
+    const payload = {};
+
+    form.querySelectorAll("input, select, textarea").forEach((field) => {
+        if (!isDraftFieldEligible(field)) {
+            return;
+        }
+
+        const name = String(field.name || "").trim();
+        const type = String(field.type || "").toLowerCase();
+
+        if (type === "checkbox") {
+            if (!Object.prototype.hasOwnProperty.call(payload, name)) {
+                payload[name] = [];
+            }
+
+            if (field.checked) {
+                payload[name].push(field.value || "on");
+            }
+            return;
+        }
+
+        if (type === "radio") {
+            if (!Object.prototype.hasOwnProperty.call(payload, name)) {
+                payload[name] = "";
+            }
+
+            if (field.checked) {
+                payload[name] = field.value;
+            }
+            return;
+        }
+
+        payload[name] = field.value;
+    });
+
+    return payload;
+}
+
+function applyDraftPayload(form, payload) {
+    const groupedFields = new Map();
+
+    form.querySelectorAll("input, select, textarea").forEach((field) => {
+        if (!isDraftFieldEligible(field)) {
+            return;
+        }
+
+        const name = String(field.name || "").trim();
+        if (!groupedFields.has(name)) {
+            groupedFields.set(name, []);
+        }
+        groupedFields.get(name).push(field);
+    });
+
+    groupedFields.forEach((fields, name) => {
+        if (!fields.length) {
+            return;
+        }
+
+        const sampleField = fields[0];
+        const type = String(sampleField.type || "").toLowerCase();
+
+        if (type === "checkbox") {
+            const selectedValues = Array.isArray(payload[name])
+                ? payload[name].map((value) => String(value ?? ""))
+                : (payload[name] ? [String(payload[name])] : []);
+
+            fields.forEach((field) => {
+                field.checked = selectedValues.includes(String(field.value || "on"));
+                field.dispatchEvent(new Event("change", { bubbles: true }));
+            });
+            return;
+        }
+
+        if (type === "radio") {
+            const selectedValue = String(payload[name] ?? "");
+            fields.forEach((field) => {
+                field.checked = selectedValue === String(field.value || "");
+                field.dispatchEvent(new Event("change", { bubbles: true }));
+            });
+            return;
+        }
+
+        const nextValue = payload[name] == null ? "" : String(payload[name]);
+        sampleField.value = nextValue;
+        sampleField.dispatchEvent(new Event("input", { bubbles: true }));
+        sampleField.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+}
+
+function buildDraftStorageKey(form) {
+    const draftKey = String(form.getAttribute("data-draft-key") || "").trim();
+    if (!draftKey) {
+        return "";
+    }
+
+    return `rpv_form_draft_${getAppUserScope()}_${draftKey}`;
+}
+
+function buildDraftSubmitMarkerKey(storageKey) {
+    return `${storageKey}__submitted`;
+}
+
+function readStoredDraft(storageKey) {
+    if (!storageKey) {
+        return null;
+    }
+
+    try {
+        const rawValue = window.localStorage.getItem(storageKey);
+        return rawValue ? JSON.parse(rawValue) : null;
+    } catch (error) {
+        console.warn("Nao foi possivel ler o rascunho local do formulario.", error);
+        return null;
+    }
+}
+
+function writeStoredDraft(storageKey, payload) {
+    if (!storageKey) {
+        return;
+    }
+
+    try {
+        window.localStorage.setItem(storageKey, JSON.stringify(payload));
+    } catch (error) {
+        console.warn("Nao foi possivel salvar o rascunho local do formulario.", error);
+    }
+}
+
+function removeStoredDraft(storageKey) {
+    if (!storageKey) {
+        return;
+    }
+
+    try {
+        window.localStorage.removeItem(storageKey);
+    } catch (error) {
+        console.warn("Nao foi possivel limpar o rascunho local do formulario.", error);
+    }
+}
+
+function readDraftSubmitMarker(markerKey) {
+    if (!markerKey) {
+        return "";
+    }
+
+    try {
+        return String(window.sessionStorage.getItem(markerKey) || "");
+    } catch (error) {
+        return "";
+    }
+}
+
+function writeDraftSubmitMarker(markerKey) {
+    if (!markerKey) {
+        return;
+    }
+
+    try {
+        window.sessionStorage.setItem(markerKey, "1");
+    } catch (error) {
+        console.warn("Nao foi possivel registrar o envio do formulario.", error);
+    }
+}
+
+function removeDraftSubmitMarker(markerKey) {
+    if (!markerKey) {
+        return;
+    }
+
+    try {
+        window.sessionStorage.removeItem(markerKey);
+    } catch (error) {
+        console.warn("Nao foi possivel limpar o marcador de envio do formulario.", error);
+    }
+}
+
+function pageHasSuccessFlash() {
+    return !!document.querySelector(".flash.flash-success");
+}
+
+function createDraftNotice(form, label, onDiscard) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "flash-stack";
+    wrapper.setAttribute("data-draft-notice", "1");
+
+    const flash = document.createElement("div");
+    flash.className = "flash flash-info";
+    flash.setAttribute("role", "status");
+
+    const badge = document.createElement("div");
+    badge.className = "flash-badge";
+    badge.setAttribute("aria-hidden", "true");
+    badge.textContent = "INFO";
+
+    const copy = document.createElement("div");
+    copy.className = "flash-copy";
+
+    const title = document.createElement("strong");
+    title.className = "flash-title";
+    title.textContent = "Rascunho restaurado";
+
+    const message = document.createElement("div");
+    message.className = "flash-message";
+    message.textContent = `${label} recuperou um rascunho local salvo neste navegador. Revise os campos e clique em Salvar quando concluir.`;
+
+    const actions = document.createElement("div");
+    actions.className = "content-top-14";
+
+    const discardButton = document.createElement("button");
+    discardButton.type = "button";
+    discardButton.className = "btn btn-secondary btn-sm";
+    discardButton.textContent = "Descartar rascunho";
+    discardButton.addEventListener("click", onDiscard);
+
+    actions.appendChild(discardButton);
+    copy.appendChild(title);
+    copy.appendChild(message);
+    copy.appendChild(actions);
+    flash.appendChild(badge);
+    flash.appendChild(copy);
+    wrapper.appendChild(flash);
+
+    form.prepend(wrapper);
+    return wrapper;
+}
+
+function bindFormDrafts() {
+    document.querySelectorAll("form[data-draft-key]").forEach((form) => {
+        const storageKey = buildDraftStorageKey(form);
+        if (!storageKey) {
+            return;
+        }
+
+        const submitMarkerKey = buildDraftSubmitMarkerKey(storageKey);
+        const formLabel = String(form.getAttribute("data-draft-label") || "Este formulario").trim();
+        const initialSnapshot = serializeDraftForm(form);
+        let suppressDraftPersistence = false;
+        let noticeElement = null;
+
+        const persistDraft = () => {
+            if (suppressDraftPersistence) {
+                return;
+            }
+
+            writeStoredDraft(storageKey, serializeDraftForm(form));
+        };
+
+        const restoreSnapshot = (snapshot) => {
+            suppressDraftPersistence = true;
+            applyDraftPayload(form, snapshot);
+            suppressDraftPersistence = false;
+        };
+
+        form.querySelectorAll("input, select, textarea").forEach((field) => {
+            if (!isDraftFieldEligible(field)) {
+                return;
+            }
+
+            field.addEventListener("input", persistDraft);
+            field.addEventListener("change", persistDraft);
+        });
+
+        form.addEventListener("submit", (event) => {
+            if (event.defaultPrevented) {
+                return;
+            }
+
+            persistDraft();
+            writeDraftSubmitMarker(submitMarkerKey);
+        });
+
+        const hadSubmitted = readDraftSubmitMarker(submitMarkerKey) === "1";
+        if (hadSubmitted) {
+            removeDraftSubmitMarker(submitMarkerKey);
+            if (pageHasSuccessFlash()) {
+                removeStoredDraft(storageKey);
+                return;
+            }
+        }
+
+        const storedDraft = readStoredDraft(storageKey);
+        if (!storedDraft) {
+            return;
+        }
+
+        if (areDraftPayloadsEqual(storedDraft, initialSnapshot)) {
+            removeStoredDraft(storageKey);
+            return;
+        }
+
+        restoreSnapshot(storedDraft);
+        noticeElement = createDraftNotice(form, formLabel, () => {
+            removeStoredDraft(storageKey);
+            removeDraftSubmitMarker(submitMarkerKey);
+            restoreSnapshot(initialSnapshot);
+            noticeElement?.remove();
+            noticeElement = null;
+        });
+    });
+}
+
 window.toggleSidebar = toggleSidebar;
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -1288,6 +1622,7 @@ window.addEventListener("DOMContentLoaded", () => {
     bindPhoneMask();
     bindIrrfCalculators();
     bindSavedFilters();
+    bindFormDrafts();
     scheduleWorkbenchOverflowRefresh();
 });
 

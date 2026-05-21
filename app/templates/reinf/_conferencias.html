@@ -1,20 +1,91 @@
-{% macro render_conferencia_mensal_painel(linha, values) %}
+{% macro render_conferencia_mensal_painel(linha, values, review_group_key, url_retorno_atual) %}
     <div class="reinf-conference-panel-head">
         <div>
             <strong>{{ linha.beneficiario }}</strong>
             <div class="progress-meta">{{ linha.documento }} | {{ linha.pagamentos|length }} processo(s) em {{ linha.competencia_label }}</div>
         </div>
-        <div class="reinf-conference-panel-totals">
-            <span>Base {{ values.render_value(linha.valor_base, 'moeda', 'compact') }}</span>
-            <span>IRRF {{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</span>
+        <div class="reinf-conference-panel-side">
+            <div
+                class="reinf-review-progress-card reinf-review-progress-card-inline"
+                data-reinf-progress-summary
+                data-review-group="{{ review_group_key }}"
+                data-total-count="{{ linha.pagamentos|length }}"
+                data-review-state="{% if linha.todos_processos_conferidos %}complete{% elif linha.processos_conferidos_parcialmente %}partial{% else %}idle{% endif %}"
+            >
+                <strong data-reinf-progress-count>{{ linha.pagamentos_conferidos }}/{{ linha.pagamentos|length }}</strong>
+                <span data-reinf-progress-label>{{ linha.rotulo_progresso_conferencia }}</span>
+            </div>
+            <div class="reinf-conference-panel-totals">
+                <span>Base {{ values.render_value(linha.valor_base, 'moeda', 'compact') }}</span>
+                <span>IRRF {{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</span>
+            </div>
         </div>
     </div>
 
     <div class="reinf-process-flow-grid">
         {% for pagamento in linha.pagamentos %}
-            <article class="reinf-process-flow-item">
+            {% set process_review_key = review_group_key ~ "|" ~ pagamento.origem_chave ~ "|" ~ pagamento.registro_id %}
+            <article
+                class="reinf-process-flow-item{% if pagamento.conferencia_revisada %} is-reviewed{% endif %}"
+                data-reinf-review-item
+                data-review-group="{{ review_group_key }}"
+                data-review-item-key="{{ process_review_key }}"
+            >
                 <div class="reinf-process-flow-head">
-                    <strong>{{ pagamento.processo }}</strong>
+                    <div class="reinf-process-flow-title-row">
+                        <div class="reinf-process-flow-title-block">
+                            <span class="reinf-process-step">{{ loop.index }}/{{ linha.pagamentos|length }}</span>
+                            <div class="reinf-process-flow-title-copy">
+                                <strong>{{ pagamento.processo }}</strong>
+                                <span class="reinf-process-flow-meta">{{ pagamento.ci }} | {{ pagamento.origem }} | pago em {{ pagamento.data_pagamento_legivel }}</span>
+                            </div>
+                        </div>
+                        <form
+                            method="POST"
+                            action="{{ url_for('reinf.marcar_conferencia_processo') }}"
+                            class="reinf-review-toggle-form"
+                            data-reinf-review-form
+                            data-review-group="{{ review_group_key }}"
+                            data-review-item-key="{{ process_review_key }}"
+                        >
+                            {{ csrf_input() }}
+                            <input type="hidden" name="origem" value="{{ pagamento.origem_chave }}">
+                            <input type="hidden" name="registro_id" value="{{ pagamento.registro_id }}">
+                            <input type="hidden" name="retorno" value="{{ url_retorno_atual }}">
+                            <input
+                                type="hidden"
+                                name="revisado"
+                                value="{{ '0' if pagamento.conferencia_revisada else '1' }}"
+                                data-reinf-review-intent
+                            >
+                            <button
+                                type="submit"
+                                class="reinf-review-toggle reinf-review-toggle-process"
+                                data-reinf-review-toggle
+                                data-review-group="{{ review_group_key }}"
+                                data-review-item-key="{{ process_review_key }}"
+                                data-label-default="Marcar"
+                                data-label-active="Conferido"
+                                data-meta-default="este processo"
+                                data-meta-reviewed="{{ pagamento.conferencia_revisada_meta or 'Conferido no historico.' }}"
+                                aria-pressed="{{ 'true' if pagamento.conferencia_revisada else 'false' }}"
+                            >
+                                <span class="reinf-review-toggle-box" aria-hidden="true">
+                                    <span class="reinf-review-toggle-mark"></span>
+                                </span>
+                                <span class="reinf-review-toggle-copy">
+                                    <strong>{% if pagamento.conferencia_revisada %}Conferido{% else %}Marcar{% endif %}</strong>
+                                    <span data-reinf-review-meta>
+                                        {% if pagamento.conferencia_revisada %}
+                                            {{ pagamento.conferencia_revisada_meta or 'Conferido no historico.' }}
+                                        {% else %}
+                                            este processo
+                                        {% endif %}
+                                    </span>
+                                </span>
+                            </button>
+                        </form>
+                    </div>
                 </div>
                 <div class="reinf-process-flow-values">
                     <div class="reinf-process-flow-metric">

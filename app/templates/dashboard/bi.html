@@ -6,10 +6,9 @@
 
 {% block content %}
 {% set filtros_abertos = filtros.q or filtros.competencia_inicial or filtros.competencia_final or filtros.origem != 'todos' or filtros.grupo_cota != 'todos' or filtros.tipo or filtros.reinf != 'todos' or filtros.responsavel != 'todos' or (visao_bi != 'conferencia' and filtros.pagamento != 'todos') or (visao_bi != 'conferencia' and filtros.janela_meses != '6') %}
-{% set destaque_cards = cards[:6] %}
 {% set beneficiarios_destacados = top_beneficiarios_fluxo[:5] %}
-{% set beneficiarios_ocultos = top_beneficiarios_fluxo[5:] %}
 {% import "components/value_display.html" as values %}
+{% import "components/bi_beneficiary_card.html" as beneficiary_cards %}
 
 <div class="dashboard-shell">
     <div class="page-header">
@@ -25,6 +24,11 @@
         </div>
         <div class="page-actions">
             <a class="btn btn-ghost" href="{{ url_for('dashboard.index') }}">Voltar para a home</a>
+            {% for chave, label in visao_opcoes.items() %}
+                <a class="btn {% if visao_bi == chave %}btn-secondary{% else %}btn-ghost{% endif %}" href="{{ visao_urls[chave] }}">
+                    {{ label }}
+                </a>
+            {% endfor %}
             <a class="btn" href="{{ export_url }}">Exportar CSV</a>
         </div>
     </div>
@@ -162,6 +166,14 @@
                     </div>
                 </form>
 
+                <p class="bi-filter-hint">
+                    {% if visao_bi == 'conferencia' %}
+                        Nesta visao, o periodo sempre segue a competencia de pagamento efetivo.
+                    {% else %}
+                        No BI operacional, o periodo usa competencia de pagamento para itens pagos e exercicio para carteiras sem data.
+                    {% endif %}
+                </p>
+
                 {% set saved_filter_scope = 'bi' %}
                 {% set saved_filter_form_id = 'bi-filter-form' %}
                 {% set saved_filter_base_url = url_for('dashboard.bi') %}
@@ -177,7 +189,7 @@
             <div class="section-heading">
                 <div>
                     <p class="section-kicker">Recorte aplicado</p>
-                    <h2>Leitura principal do BI</h2>
+                    <h2>O que este BI esta mostrando</h2>
                     <p class="section-caption">
                         {% if visao_bi == 'conferencia' %}
                             Leitura curta do recorte contabil filtrado, com foco em pagamento efetivo, origem do gasto e escopo fiscal.
@@ -190,7 +202,7 @@
 
             <div class="bi-summary-pills">
                 <div class="bi-summary-pill">
-                    <strong>{% if visao_bi == 'conferencia' %}Pagamentos filtrados{% else %}Total encontrado{% endif %}</strong>
+                    <strong>{% if visao_bi == 'conferencia' %}Pagamentos filtrados{% else %}Registros no recorte{% endif %}</strong>
                     <span>{{ total_linhas }} linha(s)</span>
                 </div>
                 <div class="bi-summary-pill">
@@ -202,7 +214,7 @@
                     <span>{{ grupo_cota_opcoes.get(filtros.grupo_cota, 'Todos os grupos') }}</span>
                 </div>
                 <div class="bi-summary-pill">
-                    <strong>Visao</strong>
+                    <strong>Leitura ativa</strong>
                     <span>{{ visao_opcoes.get(visao_bi, 'Operacional') }}</span>
                 </div>
                 {% if visao_bi == 'conferencia' %}
@@ -261,7 +273,7 @@
                     </div>
                 {% else %}
                     <div class="bi-summary-pill">
-                        <strong>Janela grafica</strong>
+                        <strong>Janela dos graficos</strong>
                         <span>{{ janela_opcoes.get(janela_meses, janela_meses ~ ' meses') }}</span>
                     </div>
                 {% endif %}
@@ -294,8 +306,8 @@
                 </span>
             </div>
 
-            <div class="bi-inline-kpis bi-summary-cycle-grid">
-                {% if visao_bi == 'conferencia' %}
+            {% if visao_bi == 'conferencia' %}
+                <div class="bi-inline-kpis bi-summary-cycle-grid">
                     <article class="bi-mini-stat">
                         <span>Pagamentos no recorte</span>
                         <strong>{{ values.render_value(conferencia_bi.totais.quantidade, 'numero', 'inline') }}</strong>
@@ -312,45 +324,61 @@
                         <span>Valor liquido total</span>
                         <strong>{{ values.render_value(conferencia_bi.totais.valor_liquido, 'moeda', 'inline') }}</strong>
                     </article>
-                {% else %}
-                    <article class="bi-mini-stat">
-                        <span>Pago no mes</span>
-                        <strong>{{ values.render_value(resumo_grupos.total_mes_pago, 'moeda', 'inline') }}</strong>
+                </div>
+            {% else %}
+                <div class="bi-cycle-visual-grid">
+                    <article class="bi-donut-panel bi-donut-panel-main">
+                        <div
+                            class="bi-cycle-donut"
+                            style="--donut: {{ graficos_ciclo_operacional.ciclo.gradient }};"
+                            aria-label="Distribuicao visual do ciclo financeiro"
+                        >
+                            <div class="bi-cycle-donut-center">
+                                <span>Ciclo</span>
+                                <strong>{{ values.render_value(graficos_ciclo_operacional.ciclo.total, 'moeda', 'compact') }}</strong>
+                            </div>
+                        </div>
+                        <div class="bi-donut-copy">
+                            <strong>Fluxo do recorte</strong>
+                            <span>Pago, carteira e previsao no mesmo mapa visual.</span>
+                        </div>
                     </article>
-                    <article class="bi-mini-stat">
-                        <span>Pago no ano</span>
-                        <strong>{{ values.render_value(resumo_grupos.total_ano_pago, 'moeda', 'inline') }}</strong>
-                    </article>
-                    <article class="bi-mini-stat">
-                        <span>Carteira em aberto</span>
-                        <strong>{{ values.render_value(resumo_grupos.total_em_aberto, 'moeda', 'inline') }}</strong>
-                    </article>
-                    <article class="bi-mini-stat">
-                        <span>Projecao seguinte</span>
-                        <strong>{{ values.render_value(resumo_grupos.total_previsao, 'moeda', 'inline') }}</strong>
-                    </article>
-                {% endif %}
-            </div>
-        </article>
-    </section>
 
-    <section class="card bi-view-card">
-        <div class="bi-view-switch">
-            <div>
-                <p class="section-kicker">Modo do BI</p>
-                <h2>Escolha a leitura</h2>
-                <p class="section-caption">
-                    `Operacional` para gestao do fluxo. `Conferencia` para leitura contabil por pagamento efetivo, totais mensais e soma geral sem poluir a visao principal.
-                </p>
-            </div>
-            <div class="bi-view-actions">
-                {% for chave, label in visao_opcoes.items() %}
-                    <a class="btn {% if visao_bi == chave %}btn-secondary{% else %}btn-ghost{% endif %}" href="{{ visao_urls[chave] }}">
-                        {{ label }}
-                    </a>
-                {% endfor %}
-            </div>
-        </div>
+                    <article class="bi-donut-panel">
+                        <div
+                            class="bi-mini-pie"
+                            style="--donut: {{ graficos_ciclo_operacional.grupos_mes.gradient }};"
+                            aria-label="Distribuicao dos grupos pagos no mes"
+                        ></div>
+                        <div class="bi-donut-copy">
+                            <strong>Grupos no mes</strong>
+                            <span>{{ resumo_grupos.competencia_legivel }}</span>
+                        </div>
+                    </article>
+
+                    <article class="bi-donut-panel">
+                        <div
+                            class="bi-mini-pie"
+                            style="--donut: {{ graficos_ciclo_operacional.dativos.gradient }};"
+                            aria-label="Participacao dos dativos no mes"
+                        ></div>
+                        <div class="bi-donut-copy">
+                            <strong>Dativos no mes</strong>
+                            <span>{{ '%.1f'|format(graficos_ciclo_operacional.dativos.itens[0].percentual if graficos_ciclo_operacional.dativos.itens else 0) }}% do pago</span>
+                        </div>
+                    </article>
+                </div>
+
+                <div class="bi-donut-legend">
+                    {% for item in graficos_ciclo_operacional.ciclo.itens %}
+                        <span>
+                            <i style="--dot: {{ item.cor }};"></i>
+                            {{ item.label }} · {{ values.render_value(item.valor, 'moeda', 'compact') }}
+                        </span>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </article>
     </section>
 
     {% if visao_bi == 'conferencia' %}
@@ -572,25 +600,6 @@
         </section>
     {% else %}
 
-    <section class="card bi-window-card">
-        <div class="bi-window-switch">
-            <div>
-                <p class="section-kicker">Visualizacao</p>
-                <h2>Janela modular dos graficos</h2>
-                <p class="section-caption">
-                    Altere entre 6 e 12 meses sem perder os demais filtros do recorte atual.
-                </p>
-            </div>
-            <div class="bi-window-actions">
-                {% for quantidade, label in janela_opcoes.items() %}
-                    <a class="btn {% if janela_meses == quantidade %}btn-secondary{% else %}btn-ghost{% endif %}" href="{{ janela_urls[quantidade] }}">
-                        {{ label }}
-                    </a>
-                {% endfor %}
-            </div>
-        </div>
-    </section>
-
     <section class="bi-group-grid">
         {% for grupo in series_grupos_cota %}
             <article class="card bi-group-card">
@@ -605,29 +614,10 @@
                     <span class="pill">{{ janela_opcoes.get(janela_meses, janela_meses ~ ' meses') }}</span>
                 </div>
 
-                <div class="bi-inline-kpis bi-budget-kpi-grid">
-                    <article class="bi-mini-stat">
-                        <span>Pago em {{ resumo_grupos.competencia_legivel }}</span>
-                        <strong>{{ values.render_value(grupo.valor_mes_pago, 'moeda', 'inline') }}</strong>
-                    </article>
-                    <article class="bi-mini-stat">
-                        <span>Total na janela</span>
-                        <strong>{{ values.render_value(grupo.valor_total_janela, 'moeda', 'inline') }}</strong>
-                    </article>
-                    <article class="bi-mini-stat">
-                        <span>Pago em {{ resumo_grupos.ano_referencia }}</span>
-                        <strong>{{ values.render_value(grupo.valor_ano_pago, 'moeda', 'inline') }}</strong>
-                    </article>
-                    <article class="bi-mini-stat">
-                        <span>Em aberto</span>
-                        <strong>{{ values.render_value(grupo.valor_em_aberto, 'moeda', 'inline') }}</strong>
-                    </article>
-                </div>
-
                 {% if grupo.tem_dados %}
-                    <div class="chart-columns bi-month-columns">
+                    <div class="chart-columns bi-month-columns bi-month-columns-premium">
                         {% for item in grupo.serie %}
-                            <div class="chart-column">
+                            <div class="chart-column {% if item.competencia == resumo_grupos.competencia_referencia %}is-reference{% endif %}">
                                 <div class="chart-column-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
                                 <div class="chart-column-track">
                                     <div class="chart-column-bar {{ grupo.chart_class }}" style="height: {{ item.percentual }}%;"></div>
@@ -647,6 +637,8 @@
                     <span>Participacao no mes: {{ '%.1f'|format(grupo.percentual_pago_mes) }}%</span>
                     <span>Melhor mes da janela: {{ grupo.melhor_mes_label }} com {{ values.render_value(grupo.melhor_mes_valor, 'moeda', 'compact') }}</span>
                     <span>{{ grupo.quantidade_total_janela }} pagamento(s) na janela</span>
+                    <span>Previsao {{ resumo_grupos.proxima_competencia_legivel }}: {{ values.render_value(grupo.valor_previsao, 'moeda', 'compact') }}</span>
+                    <span>Carteira aberta: {{ values.render_value(grupo.valor_em_aberto, 'moeda', 'compact') }}</span>
                 </div>
             </article>
         {% endfor %}
@@ -735,24 +727,57 @@
         </article>
     </section>
 
-    <div class="section-heading bi-section-heading">
-        <div>
-            <p class="section-kicker">Complemento</p>
-            <h2>Indicadores complementares</h2>
-            <p class="section-caption">
-                Itens de apoio para leitura operacional, previsao e distribuicao do recorte atual.
-            </p>
+    <section class="card bi-signal-board">
+        <div class="section-heading">
+            <div>
+                <p class="section-kicker">Complemento visual</p>
+                <h2>Sinais operacionais do ciclo</h2>
+                <p class="section-caption">
+                    A mesma base dos indicadores, agora em modulos visuais para enxergar previsao, carteira e acumulado sem repetir a leitura de cards.
+                </p>
+            </div>
+            <span class="pill">{{ resumo_grupos.proxima_competencia_legivel }}</span>
         </div>
-    </div>
 
-    <section class="metric-grid bi-primary-grid">
-        {% for card in destaque_cards %}
-            <article class="card metric-card bi-metric-card bi-primary-card">
-                <div class="metric-label">{{ card.label }}</div>
-                <div class="metric-value">{{ values.render_value(card.valor, card.tipo, 'metric') }}</div>
-                <div class="metric-note">{{ card.nota }}</div>
+        <div class="bi-signal-grid">
+            <article class="bi-signal-card bi-signal-card-forecast">
+                <div class="bi-signal-meter" style="--meter: {{ sinais_operacionais.previsao.meter }}%;">
+                    <span>{{ '%.0f'|format(sinais_operacionais.previsao.percentual_vs_mes) }}%</span>
+                </div>
+                <div>
+                    <p class="section-kicker">Previsao</p>
+                    <h3>{{ sinais_operacionais.previsao.label }}</h3>
+                    <strong>{{ values.render_value(sinais_operacionais.previsao.valor, 'moeda', 'inline') }}</strong>
+                    <p>{{ sinais_operacionais.previsao.nota }}</p>
+                </div>
             </article>
-        {% endfor %}
+
+            <article class="bi-signal-card">
+                <div class="bi-signal-orbit" style="--meter: {{ sinais_operacionais.carteira.percentual }}%;">
+                    <span>{{ sinais_operacionais.carteira.beneficiarios }}</span>
+                </div>
+                <div>
+                    <p class="section-kicker">Carteira</p>
+                    <h3>Beneficiarios em aberto</h3>
+                    <strong>{{ values.render_value(sinais_operacionais.carteira.valor, 'moeda', 'inline') }}</strong>
+                    <p>{{ sinais_operacionais.carteira.nota }}</p>
+                </div>
+            </article>
+
+            <article class="bi-signal-card">
+                <div class="bi-signal-line">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <div>
+                    <p class="section-kicker">Ano e fiscal</p>
+                    <h3>{{ sinais_operacionais.ano.ano }}</h3>
+                    <strong>{{ values.render_value(sinais_operacionais.ano.valor, 'moeda', 'inline') }}</strong>
+                    <p>{{ sinais_operacionais.reinf.pendente }} pagamento(s) com REINF pendente.</p>
+                </div>
+            </article>
+        </div>
     </section>
 
     <section class="panel-grid bi-focus-grid">
@@ -863,63 +888,28 @@
                 <p class="section-kicker">Beneficiarios</p>
                 <h2>Top beneficiarios pagos com separacao fiscal</h2>
                 <p class="section-caption">
-                    Mostrando primeiro os maiores volumes do recorte. O detalhamento mensal fica recolhido para nao pesar a leitura.
+                    Mantem a leitura gerencial limpa. A investigacao completa fica em uma tela propria com filtros fiscais.
                 </p>
             </div>
-            <span class="pill">Top 5 do recorte</span>
+            <div class="bi-beneficiary-heading-side">
+                <span class="pill">{{ beneficiarios_destacados|length }} de {{ top_beneficiarios_total }} no ranking</span>
+                <span class="bi-beneficiary-context">{{ top_beneficiarios_periodo }}</span>
+            </div>
         </div>
 
         {% if beneficiarios_destacados %}
             <div class="bi-beneficiary-list bi-beneficiary-list-compact">
                 {% for item in beneficiarios_destacados %}
-                    <article class="bi-beneficiary-card">
-                        <div class="progress-item-head">
-                            <div>
-                                <strong>{{ item.label }}</strong>
-                                <div class="progress-meta">{{ item.documento }} | {{ item.quantidade }} registro(s)</div>
-                            </div>
-                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
-                        </div>
-
-                        <div class="progress-track">
-                            <div class="progress-bar progress-bar-secondary" style="width: {{ item.percentual }}%;"></div>
-                        </div>
-
-                        <div class="bi-beneficiary-splits">
-                            <span>Sem IRRF: {{ values.render_value(item.valor_sem_irrf, 'moeda', 'compact') }}</span>
-                            <span>Com IRRF: {{ values.render_value(item.valor_com_irrf, 'moeda', 'compact') }}</span>
-                            {% if item.valor_irrf_total > 0 %}
-                                <span>IRRF retido: {{ values.render_value(item.valor_irrf_total, 'moeda', 'compact') }}</span>
-                            {% endif %}
-                        </div>
-
-                        {% if item.competencias %}
-                            <details class="bi-beneficiary-details">
-                                <summary>Ver ultimas competencias</summary>
-                                <div class="bi-beneficiary-month-grid">
-                                    {% for competencia in item.competencias %}
-                                        <article class="bi-beneficiary-month-pill">
-                                            <strong>{{ competencia.label }}</strong>
-                                            <span>Total {{ values.render_value(competencia.valor_total, 'moeda', 'compact') }}</span>
-                                            <span>Sem IRRF {{ values.render_value(competencia.valor_sem_irrf, 'moeda', 'compact') }}</span>
-                                            <span>Com IRRF {{ values.render_value(competencia.valor_com_irrf, 'moeda', 'compact') }}</span>
-                                            {% if competencia.valor_irrf > 0 %}
-                                                <span>IRRF retido {{ values.render_value(competencia.valor_irrf, 'moeda', 'compact') }}</span>
-                                            {% endif %}
-                                        </article>
-                                    {% endfor %}
-                                </div>
-                            </details>
-                        {% endif %}
-                    </article>
+                    {{ beneficiary_cards.render(item) }}
                 {% endfor %}
             </div>
 
-            <div class="bi-footnote">
-                Mostrando {{ beneficiarios_destacados|length }} beneficiario(s) com maior valor pago.
-                {% if beneficiarios_ocultos %}
-                    Outros {{ beneficiarios_ocultos|length }} continuam disponiveis no CSV e na base analitica.
-                {% endif %}
+            <div class="bi-beneficiary-action-panel">
+                <div>
+                    <strong>Analise completa de beneficiarios</strong>
+                    <span>Abra a tela dedicada para filtrar por retencao, buscar beneficiario e navegar pelo ranking em lotes de 20.</span>
+                </div>
+                <a class="btn" href="{{ beneficiarios_url }}">Ver beneficiarios</a>
             </div>
         {% else %}
             <div class="empty-state">
@@ -931,7 +921,7 @@
     <section class="card bi-collapsible-card">
         <details class="filters-toggle filters-toggle-soft">
             <summary>
-                <span>Indicadores de apoio e distribuicao operacional</span>
+                <span>Distribuicao operacional do recorte</span>
                 <span class="arrow">&#9662;</span>
             </summary>
 
@@ -971,23 +961,23 @@
                         <div class="section-heading">
                             <div>
                                 <p class="section-kicker">Responsaveis</p>
-                                <h2>Maiores volumes por responsavel</h2>
+                                <h2>Registros por responsavel</h2>
                             </div>
                         </div>
 
-                        {% if valores_por_responsavel %}
-                            <div class="progress-list">
-                                {% for item in valores_por_responsavel %}
-                                    <div class="progress-item">
-                                        <div class="progress-item-head">
-                                            <span>{{ item.label }}</span>
-                                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                        {% if registros_por_responsavel %}
+                            <div class="bi-flow-rank">
+                                {% for item in registros_por_responsavel %}
+                                    <article class="bi-flow-row">
+                                        <div class="bi-flow-row-copy">
+                                            <strong>{{ item.label }}</strong>
+                                            <span>{{ item.quantidade }} registro(s) no recorte</span>
                                         </div>
-                                        <div class="progress-track">
-                                            <div class="progress-bar progress-bar-amber" style="width: {{ item.percentual }}%;"></div>
+                                        <div class="bi-flow-row-bar">
+                                            <span style="width: {{ item.percentual }}%;"></span>
                                         </div>
-                                        <div class="progress-meta">{{ item.quantidade }} registro(s)</div>
-                                    </div>
+                                        <div class="bi-flow-row-side">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                                    </article>
                                 {% endfor %}
                             </div>
                         {% else %}
@@ -1001,23 +991,17 @@
                         <div class="section-heading">
                             <div>
                                 <p class="section-kicker">Tipos</p>
-                                <h2>Tipos operacionais com maior volume</h2>
+                                <h2>Tipos por quantidade</h2>
                             </div>
                         </div>
 
-                        {% if valores_por_tipo %}
-                            <div class="progress-list">
-                                {% for item in valores_por_tipo %}
-                                    <div class="progress-item">
-                                        <div class="progress-item-head">
-                                            <span>{{ item.label }}</span>
-                                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
-                                        </div>
-                                        <div class="progress-track">
-                                            <div class="progress-bar progress-bar-amber" style="width: {{ item.percentual }}%;"></div>
-                                        </div>
-                                        <div class="progress-meta">{{ item.quantidade }} registro(s)</div>
-                                    </div>
+                        {% if registros_por_tipo %}
+                            <div class="bi-chip-cloud">
+                                {% for item in registros_por_tipo %}
+                                    <span class="bi-chip-meter" style="--meter: {{ item.percentual }}%;">
+                                        <strong>{{ item.label }}</strong>
+                                        <em>{{ item.quantidade }} registro(s)</em>
+                                    </span>
                                 {% endfor %}
                             </div>
                         {% else %}
@@ -1031,23 +1015,20 @@
                         <div class="section-heading">
                             <div>
                                 <p class="section-kicker">Pagamento</p>
-                                <h2>Pago x carteira</h2>
+                                <h2>Pago x carteira em unidades</h2>
                             </div>
                         </div>
 
-                        {% if valores_por_pagamento %}
-                            <div class="progress-list">
-                                {% for item in valores_por_pagamento %}
-                                    <div class="progress-item">
-                                        <div class="progress-item-head">
-                                            <span>{{ item.label }}</span>
-                                            <div class="progress-item-value">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</div>
+                        {% if distribuicao_pagamento %}
+                            <div class="bi-donut-list">
+                                {% for item in distribuicao_pagamento %}
+                                    <article class="bi-donut-row">
+                                        <div class="bi-mini-donut" style="--slice: {{ item.participacao }}%;"></div>
+                                        <div>
+                                            <strong>{{ item.label }}</strong>
+                                            <span>{{ item.quantidade }} registro(s) | {{ '%.1f'|format(item.participacao) }}%</span>
                                         </div>
-                                        <div class="progress-track">
-                                            <div class="progress-bar" style="width: {{ item.percentual }}%;"></div>
-                                        </div>
-                                        <div class="progress-meta">{{ item.quantidade }} registro(s)</div>
-                                    </div>
+                                    </article>
                                 {% endfor %}
                             </div>
                         {% else %}

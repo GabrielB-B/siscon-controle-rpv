@@ -5,6 +5,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$projectRoot = (Resolve-Path $PSScriptRoot).Path
+$projectFolder = Split-Path $projectRoot -Leaf
+
+if ($projectFolder -ne "controle_rpv_runtime") {
+    throw "Este script inicia a RUNTIME e deve ser executado somente em C:\Users\gabriel.bispo\Documents\controle_rpv_runtime. Caminho atual: $projectRoot. Para DEV, use .\iniciar_servidor_https_local.ps1 -Port 8445."
+}
+
+if ($Port -ne 8443) {
+    throw "A runtime deve continuar na porta 8443 para preservar o link operacional anterior. Comando correto: .\executar_runtime_servico_https.ps1 -ServerIp <IP> -Port 8443"
+}
+
 function Resolve-ServerIp {
     param([string]$PreferredIp)
 
@@ -23,7 +34,6 @@ function Resolve-ServerIp {
     return $ip
 }
 
-$projectRoot = (Resolve-Path $PSScriptRoot).Path
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
     throw "Python da runtime nao encontrado em $python"
@@ -71,4 +81,3 @@ try {
 finally {
     Pop-Location
 }
-

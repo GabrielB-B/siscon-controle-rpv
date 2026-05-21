@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+
+{% block title %}Beneficiarios do BI - SISCON{% endblock %}
+{% block topbar_title %}Beneficiarios do BI{% endblock %}
+{% block topbar_subtitle %}Ranking, retencao fiscal e recorte operacional{% endblock %}
+
+{% block content %}
+{% import "components/value_display.html" as values %}
+
+<div class="dashboard-shell bi-beneficiaries-page">
+    <div class="page-header">
+        <div>
+            <h1>Beneficiarios do BI</h1>
+            <p class="muted">
+                Ranking do recorte atual com foco em retencao, valores pagos e observacao fiscal calculada.
+            </p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost" href="{{ bi_url }}">Voltar ao BI</a>
+            <a class="btn" href="{{ export_url }}">Exportar CSV</a>
+        </div>
+    </div>
+
+    <section class="card filters-card bi-collapsible-card">
+        <details class="filters-toggle filters-toggle-soft" {% if beneficiarios_filtros.q or beneficiarios_filtros.fiscal != 'todos' %}open{% endif %}>
+            <summary>
+                <span>Filtros da analise</span>
+                <span class="arrow">&#9662;</span>
+            </summary>
+
+            <div class="filters-body">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-kicker">Recorte</p>
+                        <h2>Filtros da analise</h2>
+                    </div>
+                </div>
+
+                <form method="GET" action="{{ url_for('dashboard.bi_beneficiarios') }}" class="bi-filter-grid bi-beneficiaries-filter-grid">
+            <input type="hidden" name="visao" value="{{ visao_bi }}">
+            <input type="hidden" name="q" value="{{ filtros.q }}">
+            <input type="hidden" name="reinf" value="{{ filtros.reinf }}">
+            <input type="hidden" name="janela_meses" value="{{ filtros.janela_meses }}">
+            <input type="hidden" name="pagina" value="1">
+
+            <div class="form-group">
+                <label for="competencia_inicial">Competencia inicial</label>
+                <input type="month" id="competencia_inicial" name="competencia_inicial" value="{{ filtros.competencia_inicial }}">
+            </div>
+
+            <div class="form-group">
+                <label for="competencia_final">Competencia final</label>
+                <input type="month" id="competencia_final" name="competencia_final" value="{{ filtros.competencia_final }}">
+            </div>
+
+            <div class="form-group">
+                <label for="origem">Origem</label>
+                <select id="origem" name="origem">
+                    {% for chave, label in origem_opcoes.items() %}
+                        <option value="{{ chave }}" {% if filtros.origem == chave %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="grupo_cota">Grupo</label>
+                <select id="grupo_cota" name="grupo_cota">
+                    {% for chave, label in grupo_cota_opcoes.items() %}
+                        <option value="{{ chave }}" {% if filtros.grupo_cota == chave %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="tipo">Tipo</label>
+                <select id="tipo" name="tipo">
+                    <option value="">Todos</option>
+                    {% for tipo in tipo_opcoes %}
+                        <option value="{{ tipo }}" {% if filtros.tipo == tipo %}selected{% endif %}>{{ tipo }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="responsavel">Responsavel</label>
+                <select id="responsavel" name="responsavel">
+                    <option value="todos" {% if filtros.responsavel == 'todos' %}selected{% endif %}>Todos</option>
+                    <option value="meus" {% if filtros.responsavel == 'meus' %}selected{% endif %}>Meus registros</option>
+                    {% for usuario in usuarios %}
+                        <option value="{{ usuario.id }}" {% if filtros.responsavel|string == usuario.id|string %}selected{% endif %}>{{ usuario.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            {% if visao_bi != 'conferencia' %}
+                <div class="form-group">
+                    <label for="pagamento">Pagamento</label>
+                    <select id="pagamento" name="pagamento">
+                        {% for chave, label in pagamento_opcoes.items() %}
+                            <option value="{{ chave }}" {% if filtros.pagamento == chave %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            {% else %}
+                <input type="hidden" name="pagamento" value="pagos">
+            {% endif %}
+
+            <div class="form-group">
+                <label for="fiscal">Situacao fiscal</label>
+                <select id="fiscal" name="fiscal">
+                    {% for chave, label in fiscal_opcoes.items() %}
+                        <option value="{{ chave }}" {% if beneficiarios_filtros.fiscal == chave %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group bi-beneficiaries-search-field">
+                <label for="beneficiario_q">Beneficiario</label>
+                <input
+                    type="text"
+                    id="beneficiario_q"
+                    name="beneficiario_q"
+                    value="{{ beneficiarios_filtros.q }}"
+                    placeholder="Nome, CPF ou CNPJ"
+                >
+            </div>
+
+            <div class="bi-filter-actions">
+                <button type="submit">Aplicar filtros</button>
+                <a class="btn btn-ghost" href="{{ beneficiarios_exploracao_urls.limpar }}">Limpar busca fiscal</a>
+            </div>
+                </form>
+            </div>
+        </details>
+    </section>
+
+    <section class="bi-beneficiaries-summary-grid">
+        <article class="card bi-summary-pill">
+            <strong>Beneficiarios</strong>
+            <span>{{ values.render_value(resumo_beneficiarios.total, 'numero', 'inline') }}</span>
+        </article>
+        <article class="card bi-summary-pill">
+            <strong>Com retencao</strong>
+            <span>{{ values.render_value(resumo_beneficiarios.com_retencao, 'numero', 'inline') }}</span>
+        </article>
+        <article class="card bi-summary-pill">
+            <strong>IRRF retido</strong>
+            <span>{{ values.render_value(resumo_beneficiarios.valor_irrf_total, 'moeda', 'inline') }}</span>
+        </article>
+        <article class="card bi-summary-pill">
+            <strong>Periodo</strong>
+            <span>{{ top_beneficiarios_periodo }}</span>
+        </article>
+    </section>
+
+    <section class="card bi-beneficiaries-ledger-card">
+        <div class="section-heading">
+            <div>
+                <p class="section-kicker">Ranking</p>
+                <h2>Beneficiarios do recorte</h2>
+                <p class="section-caption">
+                    {% if beneficiarios_exploracao.tem_itens %}
+                        Mostrando {{ beneficiarios_exploracao.inicio_ordem }} a {{ beneficiarios_exploracao.fim_ordem }} de {{ beneficiarios_exploracao.total_resultados }} beneficiario(s).
+                    {% else %}
+                        Nenhum beneficiario encontrado para o recorte atual.
+                    {% endif %}
+                </p>
+            </div>
+            {% if beneficiarios_exploracao.total_paginas > 0 %}
+                <span class="pill">Pagina {{ beneficiarios_exploracao.pagina }} de {{ beneficiarios_exploracao.total_paginas }}</span>
+            {% else %}
+                <span class="pill">Sem paginas</span>
+            {% endif %}
+        </div>
+
+        {% if beneficiarios_exploracao.tem_itens %}
+            <div class="bi-beneficiaries-ledger">
+                {% for item in beneficiarios_exploracao.itens %}
+                    <article class="bi-beneficiary-ledger-row {% if item.tem_retencao %}has-tax{% endif %}">
+                        <div class="bi-beneficiary-ledger-person">
+                            <strong>{{ item.label }}</strong>
+                            <span>{{ item.documento }} | {{ item.quantidade }} registro(s)</span>
+                        </div>
+                        <div>
+                            <small>Total pago</small>
+                            <strong>{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</strong>
+                        </div>
+                        <div>
+                            <small>IRRF retido</small>
+                            <strong>{{ values.render_value(item.valor_irrf_total, 'moeda', 'compact') }}</strong>
+                        </div>
+                        <div class="bi-beneficiary-ledger-note">
+                            <small>Observacao fiscal</small>
+                            <span>{{ item.observacao_fiscal }}</span>
+                        </div>
+                        <details class="bi-beneficiary-ledger-details">
+                            <summary>Competencias</summary>
+                            <div class="bi-beneficiary-month-grid">
+                                {% for competencia in item.competencias %}
+                                    <article class="bi-beneficiary-month-pill">
+                                        <strong>{{ competencia.label }}</strong>
+                                        <span>Total {{ values.render_value(competencia.valor_total, 'moeda', 'compact') }}</span>
+                                        <span>IRRF {{ values.render_value(competencia.valor_irrf, 'moeda', 'compact') }}</span>
+                                    </article>
+                                {% endfor %}
+                            </div>
+                        </details>
+                    </article>
+                {% endfor %}
+            </div>
+
+            <div class="bi-beneficiary-pager">
+                <span class="bi-beneficiary-page-pill">
+                    Pagina {{ beneficiarios_exploracao.pagina }} de {{ beneficiarios_exploracao.total_paginas }}
+                </span>
+                <div class="bi-beneficiary-pager-actions">
+                    {% if beneficiarios_exploracao.tem_anterior %}
+                        <a class="btn btn-ghost" href="{{ beneficiarios_exploracao_urls.anterior }}">20 anteriores</a>
+                    {% endif %}
+                    {% if beneficiarios_exploracao.tem_proxima %}
+                        <a class="btn" href="{{ beneficiarios_exploracao_urls.proxima }}">Proximos 20</a>
+                    {% endif %}
+                </div>
+            </div>
+        {% else %}
+            <div class="empty-state">
+                Nenhum beneficiario bateu com os filtros aplicados.
+            </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

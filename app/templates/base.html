@@ -35,7 +35,7 @@
                         </a>
                         <a
                             href="{{ url_for('dashboard.bi') }}"
-                            class="menu-link {% if endpoint == 'dashboard.bi' %}is-active{% endif %}"
+                            class="menu-link {% if endpoint in ['dashboard.bi', 'dashboard.bi_beneficiarios'] %}is-active{% endif %}"
                         >
                             <span class="menu-icon">{{ ui.icon('chart') }}</span>
                             <span class="menu-text">BI</span>

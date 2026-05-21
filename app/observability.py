@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from flask import Flask, g, request
 
+from app.utils.request_meta import get_request_ip
+
 
 def init_observability(app: Flask) -> None:
     _configure_file_logging(app)
@@ -44,7 +46,7 @@ def init_observability(app: Flask) -> None:
                 response.status_code,
                 duration_ms,
                 request_id,
-                request.headers.get("X-Forwarded-For", request.remote_addr) or "-",
+                get_request_ip() or "-",
             )
 
         return response
@@ -86,4 +88,3 @@ def _configure_file_logging(app: Flask) -> None:
 
     app.logger.addHandler(handler)
     app.logger.setLevel(log_level)
-

@@ -69,11 +69,23 @@ IRRF_RULES_2026 = IRRFRuleSet(
 )
 
 
+IRRF_RULES_BY_YEAR = {
+    2026: IRRF_RULES_2026,
+}
+
+
+def get_available_irrf_years() -> tuple[int, ...]:
+    return tuple(sorted(IRRF_RULES_BY_YEAR))
+
+
 def get_irrf_rules(ano_calendario: int) -> IRRFRuleSet:
-    if int(ano_calendario) == 2026:
-        return IRRF_RULES_2026
+    regras = IRRF_RULES_BY_YEAR.get(int(ano_calendario))
+    if regras is not None:
+        return regras
+
+    anos_disponiveis = ", ".join(str(ano) for ano in get_available_irrf_years())
 
     raise ValueError(
         "Nao existe tabela operacional cadastrada para esse ano. "
-        "Nesta etapa, o calculo assistido suporta apenas 2026."
+        f"Anos disponiveis hoje: {anos_disponiveis}."
     )

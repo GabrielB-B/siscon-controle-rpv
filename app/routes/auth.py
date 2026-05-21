@@ -10,12 +10,14 @@ from app.services.notification_service import NotificationDeliveryError, channel
 from app.services.password_reset_service import PasswordResetService
 from app.utils.account_security import validar_senha
 from app.utils.datetime_utils import utc_now_naive
+from app.utils.request_meta import get_request_ip
 from app.utils.request_throttle import request_throttle
 
 auth_bp = Blueprint("auth", __name__)
 
 PASSWORD_RESET_SESSION_KEYS = (
     "password_reset_identified_user_id",
+    "password_reset_identified_login",
     "password_reset_identified_expires_at",
     "password_reset_pending_request_id",
     "password_reset_pending_challenge_token",
@@ -24,10 +26,11 @@ PASSWORD_RESET_SESSION_KEYS = (
     "password_reset_pending_channel",
     "password_reset_verified_request_id",
 )
+PASSWORD_RESET_GENERIC_DESTINATION = "contato protegido cadastrado"
 
 
 def _request_ip() -> str | None:
-    return (request.headers.get("X-Forwarded-For", request.remote_addr) or "").split(",")[0].strip() or None
+    return get_request_ip()
 
 
 def _format_retry_after(segundos: int) -> str:
@@ -58,9 +61,10 @@ def _login_throttle_key(login: str | None) -> str:
     return f"login:{ip}:{login_normalizado}"
 
 
-def _password_reset_send_throttle_key(usuario: User) -> str:
+def _password_reset_send_throttle_key(login_hint: str | None) -> str:
     ip = _request_ip() or "desconhecido"
-    return f"password-reset-send:{ip}:{usuario.id}"
+    login_normalizado = str(login_hint or "").strip().lower() or "anonimo"
+    return f"password-reset-send:{ip}:{login_normalizado}"
 
 
 def _clear_password_reset_session(*, keep_verified: bool = False):
@@ -81,14 +85,21 @@ def _store_pending_password_reset_session(
     _clear_password_reset_session()
     session["password_reset_pending_request_id"] = request_id
     session["password_reset_pending_challenge_token"] = challenge_token
-    session["password_reset_pending_destino"] = masked_destination or "contato protegido cadastrado"
+    session["password_reset_pending_destino"] = masked_destination or PASSWORD_RESET_GENERIC_DESTINATION
     session["password_reset_pending_channel"] = channel or "contato"
     session["password_reset_pending_expires_at"] = expires_at.isoformat()
 
 
-def _store_identified_password_reset_session(*, usuario: User, ttl_minutes: int):
+def _store_identified_password_reset_session(
+    *,
+    login_hint: str,
+    ttl_minutes: int,
+    usuario: User | None = None,
+):
     _clear_password_reset_session()
-    session["password_reset_identified_user_id"] = usuario.id
+    if usuario:
+        session["password_reset_identified_user_id"] = usuario.id
+    session["password_reset_identified_login"] = str(login_hint or "").strip().lower()
     session["password_reset_identified_expires_at"] = (
         utc_now_naive() + timedelta(minutes=max(int(ttl_minutes or 10), 5))
     ).isoformat()
@@ -96,13 +107,12 @@ def _store_identified_password_reset_session(*, usuario: User, ttl_minutes: int)
 
 def _identified_password_reset_context() -> dict | None:
     expires_at_raw = session.get("password_reset_identified_expires_at")
-    usuario_id = session.get("password_reset_identified_user_id")
-    if not expires_at_raw or not usuario_id:
+    login_hint = str(session.get("password_reset_identified_login") or "").strip().lower()
+    if not expires_at_raw or not login_hint:
         return None
 
     try:
         expires_at = datetime.fromisoformat(expires_at_raw)
-        usuario_id_int = int(usuario_id)
     except (TypeError, ValueError):
         _clear_password_reset_session()
         return None
@@ -111,19 +121,26 @@ def _identified_password_reset_context() -> dict | None:
         _clear_password_reset_session()
         return None
 
-    usuario = db.session.get(User, usuario_id_int)
-    if not usuario or not usuario.ativo:
+    generic_contact_options = _generic_password_reset_contact_options()
+    if not generic_contact_options:
         _clear_password_reset_session()
         return None
 
-    contact_options = _available_password_reset_contact_options(usuario)
-    if not contact_options:
-        _clear_password_reset_session()
-        return None
+    usuario = None
+    usuario_id = session.get("password_reset_identified_user_id")
+    if usuario_id is not None:
+        try:
+            usuario = db.session.get(User, int(usuario_id))
+        except (TypeError, ValueError):
+            usuario = None
+        if usuario and not usuario.ativo:
+            usuario = None
 
     return {
         "usuario": usuario,
-        "contact_options": contact_options,
+        "login_hint": login_hint,
+        "contact_options": generic_contact_options,
+        "actual_contact_options": _available_password_reset_contact_options(usuario) if usuario else [],
         "expires_at": expires_at,
     }
 
@@ -151,7 +168,7 @@ def _pending_password_reset_context() -> dict | None:
     return {
         "request_id": request_id,
         "challenge_token": session.get("password_reset_pending_challenge_token"),
-        "masked_destination": session.get("password_reset_pending_destino") or "contato protegido cadastrado",
+        "masked_destination": session.get("password_reset_pending_destino") or PASSWORD_RESET_GENERIC_DESTINATION,
         "channel": session.get("password_reset_pending_channel") or "contato",
         "expires_at": expires_at,
         "seconds_remaining": max(int((expires_at - utc_now_naive()).total_seconds()), 0),
@@ -170,6 +187,39 @@ def _verified_password_reset_request_id() -> int | None:
 
 def _password_reset_uses_local_delivery() -> bool:
     return str(current_app.config.get("NOTIFICATION_DELIVERY_MODE", "file") or "file").strip().lower() == "file"
+
+
+def _generic_password_reset_contact_options() -> list[dict]:
+    options = []
+    if channel_is_configured("email"):
+        options.append(
+            {
+                "channel": "email",
+                "title": "Email cadastrado",
+                "masked_destination": PASSWORD_RESET_GENERIC_DESTINATION,
+            }
+        )
+    if channel_is_configured("sms"):
+        options.append(
+            {
+                "channel": "sms",
+                "title": "SMS cadastrado",
+                "masked_destination": PASSWORD_RESET_GENERIC_DESTINATION,
+            }
+        )
+    return options
+
+
+def _password_reset_success_message() -> str:
+    if _password_reset_uses_local_delivery():
+        return (
+            "Se o login informado estiver ativo e tiver o canal escolhido cadastrado, "
+            "o codigo foi registrado na caixa local de recuperacao."
+        )
+    return (
+        "Se o login informado estiver ativo e tiver o canal escolhido cadastrado, "
+        "o codigo foi enviado para o contato protegido correspondente."
+    )
 
 
 def _send_password_reset_notification(*, channel: str, destination: str, raw_code: str) -> dict:
@@ -204,6 +254,8 @@ def _send_password_reset_notification(*, channel: str, destination: str, raw_cod
 
 
 def _available_password_reset_contact_options(usuario: User) -> list[dict]:
+    if not usuario:
+        return []
     return [
         canal
         for canal in PasswordResetService.canais_recuperacao_disponiveis(usuario)
@@ -321,7 +373,7 @@ def forgot_password():
                 flash("Informe seu login para escolher um canal de recuperacao.", "warning")
                 return redirect(url_for("auth.forgot_password"))
 
-            throttle_key = _password_reset_send_throttle_key(contexto_identificado["usuario"])
+            throttle_key = _password_reset_send_throttle_key(contexto_identificado["login_hint"])
             throttle_limit, throttle_window = _password_reset_send_throttle_limits()
             throttle_decision = request_throttle.check(
                 throttle_key,
@@ -343,16 +395,33 @@ def forgot_password():
             canal_recuperacao = request.form.get("canal_recuperacao", "").strip().lower()
             canais_validos = {canal["channel"] for canal in contexto_identificado["contact_options"]}
             if canal_recuperacao not in canais_validos:
-                flash("Escolha um canal cadastrado para receber o codigo.", "warning")
+                flash("Escolha um canal disponivel para receber o codigo.", "warning")
                 return render_template(
                     "auth/forgot_password.html",
                     contact_options=contexto_identificado["contact_options"],
                     local_delivery=_password_reset_uses_local_delivery(),
                 )
 
+            usuario = contexto_identificado["usuario"]
+            canais_reais = {
+                canal["channel"] for canal in contexto_identificado.get("actual_contact_options", [])
+            }
+            if not usuario or canal_recuperacao not in canais_reais:
+                PasswordResetService.perform_dummy_work()
+                _store_pending_password_reset_session(
+                    request_id=None,
+                    challenge_token=None,
+                    masked_destination=PASSWORD_RESET_GENERIC_DESTINATION,
+                    channel=canal_recuperacao,
+                    expires_at=utc_now_naive() + timedelta(minutes=ttl_minutes),
+                )
+                request_throttle.hit(throttle_key, window_seconds=throttle_window)
+                flash(_password_reset_success_message(), "info")
+                return redirect(url_for("auth.verify_reset_code"))
+
             try:
                 solicitacao, raw_code, destination, challenge_token = PasswordResetService.criar_solicitacao(
-                    usuario=contexto_identificado["usuario"],
+                    usuario=usuario,
                     request_ip=_request_ip(),
                     ttl_minutes=ttl_minutes,
                     preferred_channel=canal_recuperacao,
@@ -385,10 +454,7 @@ def forgot_password():
                 flash("Nao foi possivel enviar o codigo agora. Tente novamente.", "danger")
                 return redirect(url_for("auth.forgot_password"))
 
-            if _password_reset_uses_local_delivery():
-                flash("Codigo registrado na caixa local de recuperacao para conferencia administrativa.", "info")
-            else:
-                flash("Codigo enviado para o contato cadastrado escolhido.", "info")
+            flash(_password_reset_success_message(), "info")
             return redirect(url_for("auth.verify_reset_code"))
 
         login = request.form.get("login", "").strip()
@@ -400,32 +466,21 @@ def forgot_password():
             )
 
         usuario = PasswordResetService.buscar_usuario_por_login(login)
-        if not usuario:
-            PasswordResetService.perform_dummy_work()
-            _clear_password_reset_session()
-            flash(
-                "Se o login informado estiver ativo e tiver contato cadastrado, os canais aparecerao protegidos para escolha.",
-                "info",
-            )
-            return render_template(
-                "auth/forgot_password.html",
-                local_delivery=_password_reset_uses_local_delivery(),
-            )
-
-        contact_options = _available_password_reset_contact_options(usuario)
+        PasswordResetService.perform_dummy_work()
+        contact_options = _generic_password_reset_contact_options()
         if not contact_options:
-            PasswordResetService.perform_dummy_work()
             _clear_password_reset_session()
-            flash(
-                "Se o login informado estiver ativo e tiver contato cadastrado, os canais aparecerao protegidos para escolha.",
-                "info",
-            )
+            flash("A recuperacao de senha nao esta disponivel agora.", "warning")
             return render_template(
                 "auth/forgot_password.html",
                 local_delivery=_password_reset_uses_local_delivery(),
             )
 
-        _store_identified_password_reset_session(usuario=usuario, ttl_minutes=ttl_minutes)
+        _store_identified_password_reset_session(
+            login_hint=login,
+            ttl_minutes=ttl_minutes,
+            usuario=usuario,
+        )
         flash("Escolha onde deseja receber o codigo de recuperacao.", "info")
         return render_template(
             "auth/forgot_password.html",
@@ -462,6 +517,15 @@ def verify_reset_code():
         return redirect(url_for("auth.forgot_password"))
 
     if request.method == "POST":
+        if not contexto.get("request_id"):
+            PasswordResetService.perform_dummy_work()
+            flash("Codigo invalido ou expirado. Solicite um novo codigo se necessario.", "danger")
+            contexto = _pending_password_reset_context()
+            if not contexto:
+                flash("Solicite um novo codigo para continuar a recuperacao.", "warning")
+                return redirect(url_for("auth.forgot_password"))
+            return render_template("auth/verify_reset_code.html", contexto=contexto)
+
         try:
             solicitacao, mensagem, status = PasswordResetService.verificar_codigo(
                 solicitacao_id=contexto["request_id"],

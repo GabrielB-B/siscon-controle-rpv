@@ -11,6 +11,7 @@ from sqlalchemy.orm import joinedload
 from unidecode import unidecode
 
 from app.models import DativoCI, DativoItem, DativoLote, Processo, RegistroRPV, RPVPendenciaDocumento, User
+from app.utils.domain_profile import get_domain_profile
 from app.utils.formatters import formatar_documento_br
 from app.utils.normalizers import normalizar_documento
 from app.utils.reinf_rules import (
@@ -77,21 +78,40 @@ JANELAS_GRAFICO_BI = {
     6: "6 meses",
     12: "12 meses",
 }
+CORES_GRAFICOS_BI = {
+    "pessoal": "#2f6da8",
+    "comum": "#0f8f7c",
+    "pericial": "#e68a00",
+    "pago": "#1e3a5f",
+    "aberto": "#d97706",
+    "previsao": "#0f766e",
+    "dativos": "#2ba89a",
+    "outros": "#d8e7e4",
+}
+BENEFICIARIOS_BI_DESTAQUE = 5
+BENEFICIARIOS_BI_POR_PAGINA = 20
+BENEFICIARIOS_BI_FISCAL = {
+    "todos": "Todos",
+    "com_retencao": "Com pelo menos uma retencao",
+    "sem_retencao": "Sem retencao no recorte",
+}
+DOMAIN_PROFILE = get_domain_profile()
+LABEL_SEM_IRRF = DOMAIN_PROFILE.situacao_imposto_sem_irrf_nome
 STATUSES_PRIORITARIOS_RPV_HOME = (
     {
-        "nome": "Sem Tratamento",
+        "nome": DOMAIN_PROFILE.situacao_empenho_name("sem_tratamento"),
         "slug": "sem-tratamento",
         "label": "Sem tratamento",
         "css_class": "priority-chip-neutral",
     },
     {
-        "nome": "SE Aguardando Aprovacao",
+        "nome": DOMAIN_PROFILE.situacao_empenho_name("se_aguardando_aprovacao"),
         "slug": "se-aguardando-aprovacao",
         "label": "SE aguardando aprovacao",
         "css_class": "priority-chip-approval",
     },
     {
-        "nome": "Aguardando Retorno Banco",
+        "nome": DOMAIN_PROFILE.situacao_empenho_name("aguardando_retorno_banco"),
         "slug": "aguardando-retorno-banco",
         "label": "Aguardando retorno banco",
         "css_class": "priority-chip-bank",
@@ -144,6 +164,15 @@ def _janela_meses_bi(valor: str | int | None) -> int:
     if quantidade in JANELAS_GRAFICO_BI:
         return quantidade
     return 6
+
+
+def _inteiro_positivo(valor: str | int | None, padrao: int = 1) -> int:
+    try:
+        numero = int(str(valor or "").strip() or str(padrao))
+    except (TypeError, ValueError):
+        return padrao
+
+    return numero if numero > 0 else padrao
 
 
 def _visao_bi(valor: str | None) -> str:
@@ -291,7 +320,7 @@ def _filtro_competencia_operacional_dativo(
 
 
 def _situacao_indica_fluxo_irrf(nome_situacao: str | None) -> bool:
-    return _normalizar_texto(nome_situacao) not in {"", "sem irrf"}
+    return _normalizar_texto(nome_situacao) not in {"", _normalizar_texto(LABEL_SEM_IRRF)}
 
 
 def _status_reinf_concluido(status: str | None) -> bool:
@@ -816,6 +845,109 @@ def _linhas_bi_em_aberto(dataset: list[dict]) -> list[dict]:
     return [row for row in dataset if row["valor_previsto_aberto"] > 0]
 
 
+def _total_beneficiarios_pagos_bi(dataset: list[dict]) -> int:
+    return len(
+        {
+            row["documento_normalizado"] or row["nome_normalizado"]
+            for row in _linhas_bi_pagas(dataset)
+            if row["documento_normalizado"] or row["nome_normalizado"]
+        }
+    )
+
+
+def _periodo_pagamentos_bi(dataset: list[dict], filtros: dict[str, str]) -> str:
+    competencia_inicial = _competencia_normalizada(filtros.get("competencia_inicial"))
+    competencia_final = _competencia_normalizada(filtros.get("competencia_final"))
+    if competencia_inicial and competencia_final:
+        if competencia_inicial == competencia_final:
+            return f"Pagamentos em {_competencia_legivel(competencia_inicial)}."
+        return (
+            f"Pagamentos entre {_competencia_legivel(competencia_inicial)} "
+            f"e {_competencia_legivel(competencia_final)}."
+        )
+    if competencia_inicial:
+        return f"Pagamentos a partir de {_competencia_legivel(competencia_inicial)}."
+    if competencia_final:
+        return f"Pagamentos ate {_competencia_legivel(competencia_final)}."
+
+    competencias = _competencias_pagamento_disponiveis(dataset)
+    if not competencias:
+        return "Leitura baseada apenas nos pagamentos encontrados no recorte."
+    if len(competencias) == 1:
+        return f"Pagamentos concentrados em {_competencia_legivel(competencias[0])}."
+    return (
+        f"Pagamentos encontrados de {_competencia_legivel(competencias[0])} "
+        f"a {_competencia_legivel(competencias[-1])}."
+    )
+
+
+def _filtros_beneficiarios_bi_da_requisicao() -> dict[str, str | int | bool]:
+    busca = request.args.get("beneficiario_q", "").strip()
+    pagina = _inteiro_positivo(request.args.get("pagina"), 1)
+    fiscal = request.args.get("fiscal", "todos").strip() or "todos"
+    if fiscal not in BENEFICIARIOS_BI_FISCAL:
+        fiscal = "todos"
+    explorar = (
+        str(request.args.get("beneficiarios_explorar", "") or "").strip() == "1"
+        or bool(busca)
+        or pagina > 1
+    )
+    return {
+        "q": busca,
+        "pagina": pagina,
+        "fiscal": fiscal,
+        "explorar": explorar,
+    }
+
+
+def _url_bi_beneficiarios_pagina(
+    filtros: dict[str, str],
+    estado: dict[str, str | int | bool] | None = None,
+    **updates,
+) -> str:
+    parametros = {
+        chave: valor
+        for chave, valor in filtros.items()
+        if valor not in ("", None)
+    }
+    beneficiarios_estado = {
+        "q": str((estado or {}).get("q") or "").strip(),
+        "pagina": _inteiro_positivo((estado or {}).get("pagina"), 1),
+        "fiscal": str((estado or {}).get("fiscal") or "todos").strip() or "todos",
+    }
+    if beneficiarios_estado["fiscal"] not in BENEFICIARIOS_BI_FISCAL:
+        beneficiarios_estado["fiscal"] = "todos"
+
+    for chave, valor in updates.items():
+        if chave == "q":
+            beneficiarios_estado["q"] = str(valor or "").strip()
+        elif chave == "pagina":
+            beneficiarios_estado["pagina"] = _inteiro_positivo(valor, 1)
+        elif chave == "fiscal":
+            fiscal = str(valor or "todos").strip() or "todos"
+            beneficiarios_estado["fiscal"] = (
+                fiscal if fiscal in BENEFICIARIOS_BI_FISCAL else "todos"
+            )
+
+    if beneficiarios_estado["q"]:
+        parametros["beneficiario_q"] = beneficiarios_estado["q"]
+    if beneficiarios_estado["pagina"] > 1:
+        parametros["pagina"] = str(beneficiarios_estado["pagina"])
+    if beneficiarios_estado["fiscal"] != "todos":
+        parametros["fiscal"] = beneficiarios_estado["fiscal"]
+
+    return url_for("dashboard.bi_beneficiarios", **parametros)
+
+
+def _url_bi_beneficiarios_atalho(filtros: dict[str, str]) -> str:
+    parametros = {
+        chave: valor
+        for chave, valor in filtros.items()
+        if valor not in ("", None)
+    }
+    return url_for("dashboard.bi_beneficiarios", **parametros)
+
+
 def _registro_bi_rpv(registro: RegistroRPV) -> dict:
     processo = getattr(registro, "processo", None)
     tipo_nome = getattr(getattr(registro, "tipo_rpv", None), "nome", None) or "Sem tipo"
@@ -872,7 +1004,7 @@ def _registro_bi_rpv(registro: RegistroRPV) -> dict:
         "valor_pago": valor_pago,
         "valor_previsto_aberto": valor_previsto_aberto,
         "tem_irrf": tem_irrf,
-        "fluxo_irrf_label": "Com IRRF" if tem_irrf else "Sem IRRF",
+        "fluxo_irrf_label": "Com IRRF" if tem_irrf else LABEL_SEM_IRRF,
         "reinf_status": _reinf_status_bi(registro.reinf_status_legivel, tem_irrf),
         "url": url_for("cadastros.editar_rpv", registro_id=registro.id),
     }
@@ -937,7 +1069,7 @@ def _registro_bi_dativo(item: DativoItem) -> dict:
         "valor_pago": valor_pago,
         "valor_previsto_aberto": valor_previsto_aberto,
         "tem_irrf": tem_irrf,
-        "fluxo_irrf_label": "Com IRRF" if tem_irrf else "Sem IRRF",
+        "fluxo_irrf_label": "Com IRRF" if tem_irrf else LABEL_SEM_IRRF,
         "reinf_status": _reinf_status_bi(item.reinf_status_legivel if tem_irrf else None, tem_irrf),
         "url": _abrir_url_dativo(item),
     }
@@ -1222,6 +1354,162 @@ def _agrupar_por_campo(dataset: list[dict], campo: str, limite: int = 6) -> list
     return _aplicar_percentuais(serie[:limite])
 
 
+def _agrupar_por_campo_quantidade(dataset: list[dict], campo: str, limite: int = 6) -> list[dict]:
+    agrupado = defaultdict(lambda: {"quantidade": 0, "valor_total": Decimal("0.00")})
+
+    for row in dataset:
+        chave = row[campo] or "-"
+        agrupado[chave]["quantidade"] += 1
+        agrupado[chave]["valor_total"] += row["valor_bruto"]
+
+    serie = [
+        {
+            "label": chave,
+            "quantidade": dados["quantidade"],
+            "valor_total": dados["valor_total"],
+        }
+        for chave, dados in agrupado.items()
+    ]
+    serie.sort(
+        key=lambda item: (item["quantidade"], item["valor_total"], item["label"]),
+        reverse=True,
+    )
+    maior_quantidade = max((item["quantidade"] for item in serie), default=0)
+    for item in serie:
+        item["percentual"] = (
+            float((Decimal(item["quantidade"]) / Decimal(maior_quantidade)) * Decimal("100"))
+            if maior_quantidade > 0
+            else 0.0
+        )
+    return serie[:limite]
+
+
+def _distribuicao_status_pagamento_bi(dataset: list[dict]) -> list[dict]:
+    serie = _agrupar_por_campo_quantidade(dataset, "pagamento_status", limite=4)
+    total = sum(item["quantidade"] for item in serie)
+    for item in serie:
+        item["participacao"] = (
+            float((Decimal(item["quantidade"]) / Decimal(total)) * Decimal("100"))
+            if total > 0
+            else 0.0
+        )
+    return serie
+
+
+def _percentual_decimal(valor: Decimal, total: Decimal) -> float:
+    return float((valor / total) * Decimal("100")) if total > 0 else 0.0
+
+
+def _serie_donut_bi(items: list[dict]) -> dict:
+    total = sum((_decimal(item.get("valor")) for item in items), Decimal("0.00"))
+    cursor = 0.0
+    partes = []
+    serie = []
+
+    for item in items:
+        valor = _decimal(item.get("valor"))
+        percentual = _percentual_decimal(valor, total)
+        inicio = cursor
+        fim = min(100.0, cursor + percentual)
+        cursor = fim
+        cor = item.get("cor") or CORES_GRAFICOS_BI["outros"]
+        if percentual > 0:
+            partes.append(f"{cor} {inicio:.2f}% {fim:.2f}%")
+        serie.append(
+            {
+                **item,
+                "valor": valor,
+                "percentual": percentual,
+                "cor": cor,
+            }
+        )
+
+    if not partes:
+        partes.append("rgba(188, 201, 206, 0.42) 0% 100%")
+
+    return {
+        "total": total,
+        "itens": serie,
+        "gradient": ", ".join(partes),
+        "tem_dados": total > 0,
+    }
+
+
+def _graficos_ciclo_operacional_bi(
+    resumo_grupos: dict,
+    dativos_competencia: dict,
+) -> dict:
+    ciclo = _serie_donut_bi(
+        [
+            {
+                "label": "Pago no mes",
+                "valor": resumo_grupos["total_mes_pago"],
+                "cor": CORES_GRAFICOS_BI["pago"],
+                "nota": resumo_grupos["competencia_legivel"],
+            },
+            {
+                "label": "Carteira aberta",
+                "valor": resumo_grupos["total_em_aberto"],
+                "cor": CORES_GRAFICOS_BI["aberto"],
+                "nota": "sem pagamento",
+            },
+            {
+                "label": "Previsao seguinte",
+                "valor": resumo_grupos["total_previsao"],
+                "cor": CORES_GRAFICOS_BI["previsao"],
+                "nota": resumo_grupos["proxima_competencia_legivel"],
+            },
+        ]
+    )
+    grupos_mes = _serie_donut_bi(
+        [
+            {
+                "label": grupo["label"],
+                "valor": grupo["valor_mes_pago"],
+                "quantidade": grupo["quantidade_mes_pago"],
+                "cor": CORES_GRAFICOS_BI.get(grupo["chave"], CORES_GRAFICOS_BI["outros"]),
+                "nota": f"{grupo['quantidade_mes_pago']} pagamento(s)",
+            }
+            for grupo in resumo_grupos["grupos"]
+        ]
+    )
+    valor_dativos = _decimal(dativos_competencia.get("total_valor"))
+    valor_demais = max(resumo_grupos["total_mes_pago"] - valor_dativos, Decimal("0.00"))
+    dativos = _serie_donut_bi(
+        [
+            {
+                "label": "Dativos",
+                "valor": valor_dativos,
+                "cor": CORES_GRAFICOS_BI["dativos"],
+                "nota": f"{dativos_competencia.get('total_quantidade', 0)} pagamento(s)",
+            },
+            {
+                "label": "Demais pagamentos",
+                "valor": valor_demais,
+                "cor": CORES_GRAFICOS_BI["outros"],
+                "nota": resumo_grupos["competencia_legivel"],
+            },
+        ]
+    )
+    percentual_previsao = _percentual_decimal(
+        resumo_grupos["total_previsao"],
+        resumo_grupos["total_mes_pago"],
+    )
+
+    return {
+        "ciclo": ciclo,
+        "grupos_mes": grupos_mes,
+        "dativos": dativos,
+        "previsao": {
+            "competencia": resumo_grupos["proxima_competencia_legivel"],
+            "valor": resumo_grupos["total_previsao"],
+            "base_mes": resumo_grupos["total_mes_pago"],
+            "percentual_vs_mes": percentual_previsao,
+            "meter": min(percentual_previsao, 100.0),
+        },
+    }
+
+
 def _agrupar_top_credores(dataset: list[dict], limite: int = 8) -> list[dict]:
     agrupado = {}
 
@@ -1322,7 +1610,7 @@ def _resumo_pendencias_bi(dataset: list[dict]) -> dict:
                 "nota": "Carteira que ainda depende de fluxo fiscal",
             },
             {
-                "label": "Sem IRRF em aberto",
+                "label": f"{LABEL_SEM_IRRF} em aberto",
                 "quantidade": len(aberto_sem_irrf),
                 "valor_total": sum((row["valor_previsto_aberto"] for row in aberto_sem_irrf), Decimal("0.00")),
                 "nota": "Carteira fora da retencao no recorte",
@@ -1375,7 +1663,7 @@ def _serie_dativos_ultimas_competencias(dataset: list[dict], limite: int = 6) ->
                 "quantidade_total": quantidade_total,
                 "segmentos": [
                     {
-                        "label": "Sem IRRF",
+                        "label": LABEL_SEM_IRRF,
                         "css_class": "stack-segment-soft",
                         "valor_total": valor_sem_irrf,
                         "quantidade": quantidade_sem_irrf,
@@ -1633,6 +1921,7 @@ def _series_grupos_cota_bi(
                 "valor_ano_pago": resumo_grupo.get("valor_ano_pago", Decimal("0.00")),
                 "valor_em_aberto": resumo_grupo.get("valor_em_aberto", Decimal("0.00")),
                 "percentual_pago_mes": resumo_grupo.get("percentual_pago_mes", 0.0),
+                "valor_previsao": resumo_grupo.get("valor_previsao", Decimal("0.00")),
                 "tem_dados": valor_total_janela > 0,
                 "melhor_mes_label": melhor_mes["label"] if melhor_mes else "-",
                 "melhor_mes_valor": melhor_mes["valor_total"] if melhor_mes else Decimal("0.00"),
@@ -2029,9 +2318,8 @@ def _conferencia_pendencias_documentais_bi(filtros: dict[str, str]) -> dict:
     }
 
 
-def _top_beneficiarios_fluxo_mensal(
+def _agrupar_beneficiarios_fluxo_bi(
     dataset: list[dict],
-    limite: int = 8,
     competencias_limite: int = 4,
 ) -> list[dict]:
     agrupado = {}
@@ -2087,9 +2375,7 @@ def _top_beneficiarios_fluxo_mensal(
         reverse=True,
     )
 
-    selecionados = serie[:limite]
-
-    for item in selecionados:
+    for item in serie:
         competencias = sorted(item["competencias"].keys(), reverse=True)[:competencias_limite]
         item["competencias"] = [
             {
@@ -2103,8 +2389,113 @@ def _top_beneficiarios_fluxo_mensal(
             }
             for competencia in competencias
         ]
+        item["tem_retencao"] = item["valor_irrf_total"] > 0
+        item["observacao_fiscal"] = (
+            "Teve imposto retido no recorte e deve aparecer na observacao fiscal."
+            if item["tem_retencao"]
+            else "Sem imposto retido no recorte atual."
+        )
 
-    return _aplicar_percentuais(selecionados)
+    return _aplicar_percentuais(serie)
+
+
+def _top_beneficiarios_fluxo_mensal(
+    dataset: list[dict],
+    limite: int = BENEFICIARIOS_BI_DESTAQUE,
+    competencias_limite: int = 4,
+) -> list[dict]:
+    return _agrupar_beneficiarios_fluxo_bi(dataset, competencias_limite=competencias_limite)[:limite]
+
+
+def _filtrar_beneficiarios_fluxo_bi(serie: list[dict], busca: str | None) -> list[dict]:
+    texto = _normalizar_texto(busca)
+    documento = normalizar_documento(busca)
+    if not (texto or documento):
+        return serie
+
+    filtrados = []
+    for item in serie:
+        nome = _normalizar_texto(item.get("label"))
+        documento_item = normalizar_documento(item.get("documento"))
+        if texto and (texto in nome or texto in _normalizar_texto(item.get("documento"))):
+            filtrados.append(item)
+            continue
+        if documento and documento in documento_item:
+            filtrados.append(item)
+
+    return filtrados
+
+
+def _filtrar_beneficiarios_fiscal_bi(serie: list[dict], fiscal: str | None) -> list[dict]:
+    if fiscal == "com_retencao":
+        return [item for item in serie if item.get("tem_retencao")]
+    if fiscal == "sem_retencao":
+        return [item for item in serie if not item.get("tem_retencao")]
+    return serie
+
+
+def _resumo_beneficiarios_fiscal_bi(serie: list[dict]) -> dict:
+    com_retencao = [item for item in serie if item.get("tem_retencao")]
+    sem_retencao = [item for item in serie if not item.get("tem_retencao")]
+    return {
+        "total": len(serie),
+        "com_retencao": len(com_retencao),
+        "sem_retencao": len(sem_retencao),
+        "valor_total": sum((item["valor_total"] for item in serie), Decimal("0.00")),
+        "valor_irrf_total": sum((item["valor_irrf_total"] for item in serie), Decimal("0.00")),
+    }
+
+
+def _exploracao_beneficiarios_fluxo_bi(
+    serie_completa: list[dict],
+    *,
+    busca: str | None,
+    pagina: int,
+    fiscal: str | None = "todos",
+    destaque: int = BENEFICIARIOS_BI_DESTAQUE,
+    pagina_tamanho: int = BENEFICIARIOS_BI_POR_PAGINA,
+) -> dict:
+    busca_texto = str(busca or "").strip()
+    busca_ativa = bool(busca_texto)
+    fiscal = fiscal if fiscal in BENEFICIARIOS_BI_FISCAL else "todos"
+    serie_fiscal = _filtrar_beneficiarios_fiscal_bi(serie_completa, fiscal)
+    deslocamento_base = 0 if busca_ativa else min(destaque, len(serie_fiscal))
+    serie_base = _filtrar_beneficiarios_fluxo_bi(serie_fiscal, busca_texto) if busca_ativa else serie_fiscal[deslocamento_base:]
+
+    total_resultados = len(serie_base)
+    total_paginas = (
+        ((total_resultados - 1) // pagina_tamanho) + 1
+        if total_resultados > 0
+        else 1
+    )
+    pagina_atual = min(max(_inteiro_positivo(pagina, 1), 1), total_paginas)
+    inicio_indice = (pagina_atual - 1) * pagina_tamanho
+    itens = serie_base[inicio_indice:inicio_indice + pagina_tamanho]
+
+    if itens:
+        inicio_ordem = deslocamento_base + inicio_indice + 1
+        fim_ordem = inicio_ordem + len(itens) - 1
+    else:
+        inicio_ordem = 0
+        fim_ordem = 0
+
+    return {
+        "q": busca_texto,
+        "busca_ativa": busca_ativa,
+        "fiscal": fiscal,
+        "pagina": pagina_atual,
+        "pagina_tamanho": pagina_tamanho,
+        "total_resultados": total_resultados,
+        "total_paginas": total_paginas if total_resultados else 0,
+        "itens": itens,
+        "tem_itens": bool(itens),
+        "tem_anterior": pagina_atual > 1,
+        "tem_proxima": (inicio_indice + len(itens)) < total_resultados,
+        "inicio_ordem": inicio_ordem,
+        "fim_ordem": fim_ordem,
+        "restante_apos_destaque": max(len(serie_fiscal) - destaque, 0),
+        "total_geral": len(serie_fiscal),
+    }
 
 
 def _cards_bi(dataset: list[dict], resumo_grupos: dict | None = None) -> list[dict]:
@@ -2169,6 +2560,145 @@ def _cards_bi(dataset: list[dict], resumo_grupos: dict | None = None) -> list[di
             "nota": "Pagamentos com IRRF realizados e ainda nao resolvidos",
         },
     ]
+
+
+def _sinais_operacionais_bi(
+    dataset: list[dict],
+    resumo_grupos: dict,
+    dativos_competencia: dict,
+) -> dict:
+    linhas_pagas = _linhas_bi_pagas(dataset)
+    linhas_em_aberto = _linhas_bi_em_aberto(dataset)
+    total_reinf_pendente = sum(
+        1
+        for row in linhas_pagas
+        if row["tem_irrf"] and not _status_reinf_resolvido(row["reinf_status"])
+    )
+    beneficiarios_abertos = len(
+        {
+            row["documento_normalizado"] or row["nome_normalizado"]
+            for row in linhas_em_aberto
+            if row["documento_normalizado"] or row["nome_normalizado"]
+        }
+    )
+    base_carteira = resumo_grupos["total_mes_pago"] + resumo_grupos["total_em_aberto"]
+    percentual_previsao = _percentual_decimal(
+        resumo_grupos["total_previsao"],
+        resumo_grupos["total_mes_pago"],
+    )
+
+    return {
+        "previsao": {
+            "label": f"Projecao {resumo_grupos['proxima_competencia_legivel']}",
+            "valor": resumo_grupos["total_previsao"],
+            "percentual_vs_mes": percentual_previsao,
+            "meter": min(percentual_previsao, 100.0),
+            "nota": "Media simples das 3 ultimas competencias pagas.",
+        },
+        "carteira": {
+            "valor": resumo_grupos["total_em_aberto"],
+            "beneficiarios": beneficiarios_abertos,
+            "percentual": min(
+                _percentual_decimal(resumo_grupos["total_em_aberto"], base_carteira),
+                100.0,
+            ),
+            "nota": "Valores cadastrados sem pagamento realizado no recorte.",
+        },
+        "ano": {
+            "valor": resumo_grupos["total_ano_pago"],
+            "ano": resumo_grupos["ano_referencia"],
+            "nota": "Acumulado anual de pagamentos realizados.",
+        },
+        "dativos": {
+            "valor": dativos_competencia["total_valor"],
+            "quantidade": dativos_competencia["total_quantidade"],
+            "competencia": dativos_competencia["competencia_legivel"],
+        },
+        "reinf": {
+            "pendente": total_reinf_pendente,
+            "nota": "Pagamentos com IRRF ainda nao resolvidos na REINF.",
+        },
+    }
+
+
+def _resumo_pendencias_documentais_home(
+    pendencias_documentais: list[RPVPendenciaDocumento],
+) -> dict:
+    abertas = [
+        pendencia
+        for pendencia in pendencias_documentais
+        if pendencia.status == "aberta"
+    ]
+    minhas_abertas = [
+        pendencia
+        for pendencia in abertas
+        if (
+            pendencia.responsavel_id == current_user.id
+            or pendencia.criado_por_id == current_user.id
+        )
+    ]
+    total_abertas = len(abertas)
+    total_prontas = sum(1 for pendencia in abertas if pendencia.pode_continuar_fluxo_oficial)
+    total_sem_documento = sum(1 for pendencia in abertas if pendencia.documento_ausente)
+    total_minhas = len(minhas_abertas)
+    total_valor_aberto = sum(
+        (_decimal(pendencia.valor_bruto) for pendencia in abertas),
+        Decimal("0.00"),
+    )
+    sem_pendencias = total_abertas == 0
+
+    if sem_pendencias:
+        titulo = "Nenhum documento fora do fluxo oficial"
+        nota = (
+            "A fila setorial esta limpa agora. Se surgir um caso com documento pendente, "
+            "ele aparece aqui para todo o setor."
+        )
+    else:
+        titulo = f"{total_abertas} documento(s) fora do fluxo oficial"
+        nota = (
+            "Casos que ainda nao entram em pagamento, BI ou REINF ate validar o documento. "
+            f"{total_minhas} estao na sua fila atual."
+        )
+
+    metricas = [
+        {
+            "label": "Em revisao",
+            "valor": total_abertas,
+            "css_class": "is-total",
+        },
+        {
+            "label": "Prontas para oficializar",
+            "valor": total_prontas,
+            "css_class": "is-success",
+        },
+        {
+            "label": "Sem CPF/CNPJ",
+            "valor": total_sem_documento,
+            "css_class": "is-warning",
+        },
+        {
+            "label": "Na sua fila",
+            "valor": total_minhas,
+            "css_class": "is-neutral",
+        },
+    ]
+
+    return {
+        "total_abertas": total_abertas,
+        "total_prontas": total_prontas,
+        "total_sem_documento": total_sem_documento,
+        "total_minhas": total_minhas,
+        "total_valor_aberto": total_valor_aberto,
+        "sem_pendencias": sem_pendencias,
+        "titulo": titulo,
+        "nota": nota,
+        "metricas": metricas,
+        "url_setor": url_for(
+            "cadastros.lista_pendencias_documentais",
+            responsavel="todos",
+            status="aberta",
+        ),
+    }
 
 
 def _fila_operacional_home(
@@ -2397,6 +2927,9 @@ def index():
         dativo_items=[item for item in dativo_items if not getattr(item, "status_principal_cancelado", False)],
         pendencias_documentais=pendencias_documentais,
     )
+    pendencias_documentais_setor = _resumo_pendencias_documentais_home(
+        pendencias_documentais
+    )
     resumo_setor_rpvs = _resumo_setor_rpvs_home(rpvs=rpvs)
     resumo_setor_dativos = _resumo_setor_dativos_home(
         lotes_sem_irrf=lotes_sem_irrf,
@@ -2443,6 +2976,7 @@ def index():
         usuario=current_user,
         competencia_atual_legivel=competencia_atual_legivel,
         fila_operacional=fila_operacional,
+        pendencias_documentais_setor=pendencias_documentais_setor,
         resumo_setor_rpvs=resumo_setor_rpvs,
         resumo_setor_dativos=resumo_setor_dativos,
         total_responsaveis_sinalizados=total_responsaveis_sinalizados,
@@ -2482,12 +3016,25 @@ def bi():
         dataset_filtrado,
         resumo_grupos.get("competencia_referencia"),
     )
+    graficos_ciclo_operacional = _graficos_ciclo_operacional_bi(
+        resumo_grupos,
+        dativos_competencia,
+    )
+    sinais_operacionais = _sinais_operacionais_bi(
+        dataset_filtrado,
+        resumo_grupos,
+        dativos_competencia,
+    )
     serie_dativos = _serie_dativos_ultimas_competencias(dataset_filtrado)
-    top_beneficiarios_fluxo = _top_beneficiarios_fluxo_mensal(dataset_filtrado)
+    serie_beneficiarios_fluxo = _agrupar_beneficiarios_fluxo_bi(dataset_filtrado)
+    top_beneficiarios_fluxo = serie_beneficiarios_fluxo[:BENEFICIARIOS_BI_DESTAQUE]
+    top_beneficiarios_total = len(serie_beneficiarios_fluxo)
+    top_beneficiarios_periodo = _periodo_pagamentos_bi(dataset_filtrado, filtros)
+    beneficiarios_url = _url_bi_beneficiarios_atalho(filtros)
     valores_por_status_reinf = _agrupar_por_campo(_linhas_bi_pagas(dataset_filtrado), "reinf_status")
-    valores_por_responsavel = _agrupar_por_campo(dataset_filtrado, "responsavel")
-    valores_por_tipo = _agrupar_por_campo(dataset_filtrado, "tipo")
-    valores_por_pagamento = _agrupar_por_campo(dataset_filtrado, "pagamento_status")
+    registros_por_responsavel = _agrupar_por_campo_quantidade(dataset_filtrado, "responsavel")
+    registros_por_tipo = _agrupar_por_campo_quantidade(dataset_filtrado, "tipo")
+    distribuicao_pagamento = _distribuicao_status_pagamento_bi(dataset_filtrado)
     linhas_exibidas = dataset_filtrado[:80]
     tipos_disponiveis = sorted({row["tipo"] for row in dataset})
     usuarios = User.query.filter_by(ativo=True).order_by(User.nome.asc()).all()
@@ -2528,14 +3075,89 @@ def bi():
         acumulado_anual_grupos=acumulado_anual_grupos,
         pendencias_bi=pendencias_bi,
         dativos_competencia=dativos_competencia,
+        graficos_ciclo_operacional=graficos_ciclo_operacional,
+        sinais_operacionais=sinais_operacionais,
         serie_dativos=serie_dativos,
         top_beneficiarios_fluxo=top_beneficiarios_fluxo,
+        top_beneficiarios_total=top_beneficiarios_total,
+        top_beneficiarios_periodo=top_beneficiarios_periodo,
+        beneficiarios_url=beneficiarios_url,
         valores_por_status_reinf=valores_por_status_reinf,
-        valores_por_responsavel=valores_por_responsavel,
-        valores_por_tipo=valores_por_tipo,
-        valores_por_pagamento=valores_por_pagamento,
+        registros_por_responsavel=registros_por_responsavel,
+        registros_por_tipo=registros_por_tipo,
+        distribuicao_pagamento=distribuicao_pagamento,
         linhas=linhas_exibidas,
         total_linhas=len(dataset_filtrado),
+        export_url=export_url,
+    )
+
+
+@dashboard_bp.route("/bi/beneficiarios")
+@login_required
+def bi_beneficiarios():
+    filtros = _filtros_bi_da_requisicao()
+    filtros_beneficiarios = _filtros_beneficiarios_bi_da_requisicao()
+    visao_bi = _visao_bi(filtros.get("visao"))
+    dataset = _coletar_dataset_bi(filtros, visao=visao_bi)
+    dataset_filtrado = _filtrar_dataset_bi(dataset, filtros, visao=visao_bi)
+    serie_beneficiarios_fluxo = _agrupar_beneficiarios_fluxo_bi(dataset_filtrado)
+    resumo_beneficiarios = _resumo_beneficiarios_fiscal_bi(serie_beneficiarios_fluxo)
+    beneficiarios_exploracao = _exploracao_beneficiarios_fluxo_bi(
+        serie_beneficiarios_fluxo,
+        busca=filtros_beneficiarios.get("q"),
+        pagina=filtros_beneficiarios.get("pagina", 1),
+        fiscal=filtros_beneficiarios.get("fiscal"),
+        destaque=0,
+        pagina_tamanho=BENEFICIARIOS_BI_POR_PAGINA,
+    )
+    beneficiarios_exploracao_urls = {
+        "limpar": _url_bi_beneficiarios_pagina(filtros, None, q="", pagina=1, fiscal="todos"),
+        "anterior": (
+            _url_bi_beneficiarios_pagina(
+                filtros,
+                filtros_beneficiarios,
+                pagina=max(beneficiarios_exploracao["pagina"] - 1, 1),
+            )
+            if beneficiarios_exploracao["tem_anterior"]
+            else ""
+        ),
+        "proxima": (
+            _url_bi_beneficiarios_pagina(
+                filtros,
+                filtros_beneficiarios,
+                pagina=beneficiarios_exploracao["pagina"] + 1,
+            )
+            if beneficiarios_exploracao["tem_proxima"]
+            else ""
+        ),
+    }
+    tipos_disponiveis = sorted({row["tipo"] for row in dataset})
+    usuarios = User.query.filter_by(ativo=True).order_by(User.nome.asc()).all()
+    bi_url = url_for(
+        "dashboard.bi",
+        **{chave: valor for chave, valor in filtros.items() if valor},
+    )
+    export_url = url_for(
+        "dashboard.exportar_bi_conferencia_csv" if visao_bi == "conferencia" else "dashboard.exportar_bi_csv",
+        **{chave: valor for chave, valor in filtros.items() if valor},
+    )
+
+    return render_template(
+        "dashboard/beneficiarios.html",
+        filtros=filtros,
+        visao_bi=visao_bi,
+        origem_opcoes=ORIGENS_BI,
+        pagamento_opcoes=PAGAMENTO_BI,
+        grupo_cota_opcoes=GRUPOS_COTA_OPCOES,
+        usuarios=usuarios,
+        tipo_opcoes=tipos_disponiveis,
+        fiscal_opcoes=BENEFICIARIOS_BI_FISCAL,
+        resumo_beneficiarios=resumo_beneficiarios,
+        top_beneficiarios_periodo=_periodo_pagamentos_bi(dataset_filtrado, filtros),
+        beneficiarios_filtros=filtros_beneficiarios,
+        beneficiarios_exploracao=beneficiarios_exploracao,
+        beneficiarios_exploracao_urls=beneficiarios_exploracao_urls,
+        bi_url=bi_url,
         export_url=export_url,
     )
 

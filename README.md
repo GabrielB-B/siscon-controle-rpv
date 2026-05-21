@@ -59,7 +59,7 @@ O projeto nasceu para substituir controles dispersos em planilhas e verificacoes
 A versao publicada foi validada antes do push:
 
 ```text
-220 testes automatizados passando
+238 testes automatizados passando
 Varredura de arquivos sensiveis no Git
 Repositorio sem banco, planilhas, certificados, backups ou .env real
 Commit publicado com e-mail noreply
