@@ -1,87 +1,63 @@
 # SISCON Controle de RPVs
 
-Aplicacao web Flask para controle financeiro e operacional de RPVs. O sistema organiza requisicoes individuais, pagamentos em lote, pendencias documentais, conciliacao de importacoes, conferencia REINF e BI operacional.
+Aplicacao web Flask para controle operacional e financeiro de RPVs, dativos, cotas mensais, REINF e BI operacional.
 
-Esta versao foi preparada para portfolio publico. Ela demonstra arquitetura, regras de negocio, testes e operacao local, mas nao inclui banco real, planilhas, backups, certificados, arquivos `.env` reais ou documentos internos.
+Esta pasta e o espelho publico do sistema, preparada para portfolio tecnico. O objetivo aqui e demonstrar arquitetura, qualidade de codigo, organizacao de produto e disciplina operacional sem expor banco real, planilhas, backups, certificados, segredos ou documentos internos.
 
-## Contexto
+## O que este repositorio demonstra
 
-O projeto nasceu para substituir controles dispersos em planilhas e verificacoes manuais por um sistema local com rastreabilidade, validacao de regras, historico de alteracoes e separacao segura entre codigo e dados sensiveis.
+- Monolito modular em Flask com crescimento controlado.
+- Dominio real de RPVs, dativos, cotas, REINF e BI.
+- Separacao entre `routes`, `services`, `models`, `templates` e `tests`.
+- Evolucao de schema via Alembic.
+- Regras financeiras e fiscais com `Decimal`.
+- Auditoria de alteracoes sensiveis.
+- Healthcheck operacional e observabilidade local.
+- Scripts Windows para execucao, backup e publicacao segura.
+- Suite automatizada com `267` testes passando na sincronizacao desta copia.
 
-## Destaques
+## Principais modulos
 
-- Controle de RPVs individuais e pagamentos em lote.
-- Importacao assistida com validacao, conciliacao e tratamento de duplicidades.
-- REINF mensal e anual com agrupamento por competencia.
-- BI operacional com filtros, indicadores e visoes de conferencia.
-- Auditoria de alteracoes com snapshots antes/depois.
-- Recuperacao de senha, notificacao local e trocas obrigatorias de senha.
-- Healthcheck operacional, observabilidade basica e trilha local de suporte.
-- Throttling persistente em SQLite para proteger login e recuperacao.
-- Separacao segura entre codigo versionado e dados operacionais.
+- `RPVs normais`: cadastro, lista, filtros, pendencias e cruzamentos.
+- `RPVs dativos`: C.I., lotes, itens, conciliacao e revisao operacional.
+- `Cotas`: saldo mensal por ficha, consumo, transferencia e historico.
+- `REINF`: recortes mensal/anual, conferencia fiscal e exportacao.
+- `BI`: leitura executiva, series operacionais, beneficiarios e filtros.
+- `Usuarios e seguranca`: login, troca de senha, recuperacao e perfis.
 
-## Funcionalidades de Negocio
+## Estado arquitetural atual
 
-- Controle de processo, beneficiario, documento, valor bruto, IRRF, valor liquido e status.
-- Controle de C.I., lote e item para pagamentos agrupados.
-- Competencia operacional protegida para BI e REINF, priorizando o mes de pagamento quando houver quitacao.
-- Pendencias documentais para casos ainda nao prontos para o fluxo financeiro.
-- Regras fiscais para IRRF, inclusive cenarios sem retencao.
-- Edicao controlada de campos sensiveis com confirmacao explicita.
-- Auditoria operacional preventiva e healthchecks locais.
+O projeto evoluiu para um patamar mais profissional sem reescrita grande. As melhorias mais relevantes desta fase publica foram:
 
-## Habilidades Demonstradas
+- modularizacao do `BI` em servicos dedicados;
+- modularizacao de `dativos`, `REINF` e lista principal de `RPVs`;
+- separacao progressiva da suite por dominio;
+- endurecimento da camada operacional para crescimento futuro;
+- reforco da governanca entre `dev`, `runtime` e espelho publico.
 
-- Flask com Blueprints e SQLAlchemy.
-- Modelagem de dominio financeiro e operacional.
-- Migrations Alembic para evolucao segura do schema.
-- Regras de negocio com `Decimal`.
-- Importacao e conciliacao de planilhas.
-- Autenticacao, perfis, CSRF e recuperacao de senha.
-- Observabilidade basica, logs locais e controles operacionais.
-- Testes automatizados de regras de negocio e fluxos web.
-- Scripts PowerShell para execucao local e publicacao segura em Windows.
+## Qualidade e validacao
 
-## Stack
-
-- Python
-- Flask
-- SQLAlchemy
-- Flask-Migrate / Alembic
-- SQLite em desenvolvimento local
-- Jinja2
-- HTML, CSS e JavaScript
-- PowerShell
-- Pytest
-
-## Qualidade e Validacao
-
-A versao publicada foi validada antes do push:
+Na sincronizacao desta copia publica, a validacao considerada foi:
 
 ```text
-238 testes automatizados passando
-Varredura de arquivos sensiveis no Git
-Repositorio sem banco, planilhas, certificados, backups ou .env real
-Commit publicado com e-mail noreply
+267 testes automatizados passando
+python -m compileall app tests -q sem erro
+varredura de seguranca sem banco real, instance, .env real, backups ou docs privados rastreados
 ```
 
 ## Estrutura
 
 ```text
-app/                         Aplicacao Flask
-app/models/                  Modelos SQLAlchemy
-app/routes/                  Blueprints e rotas web
-app/services/                Regras de negocio, importacao, auditoria e observabilidade
-app/templates/               Templates Jinja2
-app/static/                  CSS e JavaScript
-migrations/                  Historico de migrations Alembic
-tests/                       Testes automatizados
-docs/                        Documentacao publica e sanitizada
-.env.example                 Exemplo de variaveis locais
-.gitignore                   Protecao contra dados sensiveis
+app/                   aplicacao Flask
+migrations/            historico Alembic
+tests/                 testes automatizados
+docs/                  documentacao publica do portfolio
+run.py                 entrada Flask
+serve_local.py         servidor HTTP local
+serve_https_local.py   servidor HTTPS local
 ```
 
-## Como Rodar Localmente
+## Como rodar localmente
 
 ```powershell
 python -m venv .venv
@@ -94,13 +70,13 @@ flask seed-data
 python serve_local.py
 ```
 
-Depois acesse:
+Endereco padrao:
 
 ```text
 http://127.0.0.1:8080/login
 ```
 
-Para testar HTTPS local no Windows:
+Para HTTPS local:
 
 ```powershell
 .\iniciar_servidor_https_local.ps1 -Port 8445 -ForceCert
@@ -112,25 +88,26 @@ Para testar HTTPS local no Windows:
 python -m pytest -q tests
 ```
 
-## Documentacao
+## Documentacao publica
 
+- [Indice da documentacao](docs/README.md)
 - [Arquitetura](docs/ARCHITECTURE.md)
 - [Funcionalidades](docs/FEATURES.md)
-- [Seguranca e privacidade](docs/SECURITY.md)
+- [Seguranca](docs/SECURITY.md)
 - [Setup local](docs/SETUP.md)
 - [Notas de portfolio](docs/PORTFOLIO.md)
 
-## Privacidade
+## Higiene de publicacao
 
-Este repositorio foi sanitizado para publicacao. Os dados reais devem permanecer fora do Git:
+Este repositorio deve permanecer sem:
 
-- bancos SQLite;
-- planilhas de entrada e saida;
+- bancos SQLite reais;
+- pasta `instance/`;
 - backups;
-- certificados locais;
-- arquivos `.env`;
-- senhas, tokens e chaves privadas;
-- documentos operacionais internos.
+- planilhas e PDFs operacionais;
+- `.env` real;
+- certificados e chaves locais;
+- material juridico, negocial ou privado.
 
 ## Autor
 

@@ -1,41 +1,38 @@
 # Notas de Portfolio
 
-Este projeto demonstra uma aplicacao operacional realista, com foco em confiabilidade, rastreabilidade e tratamento seguro de dados sensiveis.
+Este repositorio representa um sistema real de controle operacional e financeiro, sanitizado para demonstracao publica.
 
-O dominio funcional envolve controle de Requisicoes de Pequeno Valor, com pagamentos de honorarios advocaticios realizados pelo Estado. A versao publica descreve o problema e a solucao sem expor dados reais, documentos internos ou bases de producao.
+## O valor tecnico mostrado aqui
 
-## Habilidades Demonstradas
+- dominio nao trivial com regras reais;
+- disciplina de runtime separada da `dev`;
+- historico de evolucao com modularizacao progressiva;
+- validacao automatizada cobrindo fluxos sensiveis;
+- preocupacao com auditoria, observabilidade e seguranca.
 
-- Modelagem de dominio com SQLAlchemy.
-- Evolucao de schema com Alembic.
-- Organizacao Flask por Blueprints.
-- Regras fiscais e financeiras com `Decimal`.
-- Importacao de planilhas com validacao e conciliacao.
-- Auditoria de alteracoes com snapshots.
-- Controle de acesso e recuperacao de senha.
-- Dashboards operacionais com filtros.
-- BI operacional para conferencia de pagamentos, pendencias, responsaveis e competencias.
-- Observabilidade basica com healthcheck, logs e auditoria operacional.
-- Protecao com throttling persistente em SQLite e separacao segura entre desenvolvimento e runtime.
-- Testes automatizados de regras de negocio e fluxos web.
-- Scripts locais para execucao em Windows.
+## O que mudou na fase mais recente
 
-## Decisoes de Produto
+Esta copia publica foi atualizada para refletir:
 
-- A aplicacao prioriza seguranca operacional: dados sensiveis ficam fora do repositorio.
-- Importacoes nao entram direto no fluxo sem validacao.
-- Duplicidades sao bloqueadas ou encaminhadas para revisao.
-- Historico registra quem alterou, quando alterou e o que mudou.
-- Campos sensiveis exigem confirmacao antes de alteracao.
-- O BI preserva a competencia correta de pagamento como regra de seguranca do dominio.
+- modularizacao do `BI`;
+- modularizacao de `dativos`, `REINF` e lista principal de `RPVs`;
+- entrada do modulo de `cotas`;
+- divisao progressiva da suite de testes;
+- reforco da camada de seguranca do repositorio publico.
 
-## Como Apresentar
+## Como apresentar o projeto
 
-Use screenshots anonimizadas, dados ficticios e um banco local descartavel. Evite imagens com nomes, documentos, processos, valores reais, IPs internos ou caminhos de maquina pessoal.
+Narrativa sugerida:
 
-Sugestao de narrativa:
+1. problema: controles financeiros e fiscais operando em planilhas e fluxos manuais;
+2. solucao: aplicacao web com validacao, auditoria, BI, conferencia fiscal e rotinas operacionais;
+3. diferencial: sistema cresceu com governanca, testes, migrations e separacao segura entre codigo e dados;
+4. maturidade: nao e um prototipo visual, e um produto interno com trilha de endurecimento arquitetural.
 
-1. Contexto: controle operacional de honorarios advocaticios pagos via Requisicoes de Pequeno Valor.
-2. Problema: planilhas e fluxos manuais geram risco de erro e baixa rastreabilidade.
-3. Solucao: aplicacao web com validacao, auditoria, dashboards, observabilidade e importacao assistida.
-4. Resultado tecnico: codigo modular, migrations, testes e isolamento de dados.
+## Como demonstrar sem risco
+
+- use dados ficticios;
+- use screenshots anonimizadas;
+- suba banco descartavel local;
+- nao use capturas com nomes, documentos, processos, IPs ou valores reais;
+- trate a pasta `instance/` como material local e descartavel.

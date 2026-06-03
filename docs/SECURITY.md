@@ -1,44 +1,48 @@
 # Seguranca e Privacidade
 
-Esta versao publica foi preparada para demonstrar arquitetura, regras de negocio e qualidade tecnica sem expor dados reais.
+Este espelho publico foi mantido para demonstrar o produto sem expor dados operacionais reais.
 
-## O Que Nao Deve Ir Para o Git
+## O que fica fora do Git
 
 - `instance/`
-- bancos `.db`, `.sqlite` e derivados WAL/SHM
+- bancos `.db`, `.sqlite` e derivados
 - `.env` real
 - backups
-- certificados e chaves locais
-- planilhas de entrada e saida
-- PDFs e CSVs operacionais
-- senhas, tokens, webhooks e credenciais SMTP
-- documentos internos com nomes, processos, IPs ou rotinas privadas
+- planilhas, PDFs e CSVs operacionais
+- certificados, chaves e segredos
+- arquivos de runtime com dados reais
+- documentos privados, juridicos, negociais ou probatorios
 
-## Controles No Projeto
+## Controles adotados
 
-- `.gitignore` bloqueia bancos, planilhas, backups, runtime, certificados e segredos.
-- `.env.example` mostra configuracao sem credenciais reais.
-- Chave secreta pode ser gerada localmente em `instance/.secret_key`.
-- Senha inicial do admin pode vir de `ADMIN_INITIAL_PASSWORD` ou arquivo local ignorado pelo Git.
-- Formularios usam protecao CSRF.
-- Senhas de usuario usam hash seguro.
-- Login e recuperacao de senha possuem throttling configuravel com armazenamento local.
-- Notificacoes de recuperacao podem ficar em `instance/notifications` no modo local, sem sair para o Git.
-- Logs e artefatos operacionais permanecem em `instance/` e fora do versionamento.
-- Alteracoes relevantes geram historico auditavel.
+- `.gitignore` endurecido para dados sensiveis;
+- `.env.example` sem credenciais reais;
+- separacao entre repositorio privado de trabalho, runtime operacional e espelho publico;
+- scripts preparados para operacao local sem exigir segredos no repo;
+- logs, notificacoes e artefatos operacionais mantidos fora do versionamento;
+- validacao manual antes de push para evitar vazamento acidental.
 
-## Antes De Publicar
-
-Execute uma revisao final:
+## Checklist antes de publicar
 
 ```powershell
 git status --short
 git ls-files
-rg -n "SECRET_KEY=|DATABASE_URL=|password=|senha=|token=|\\.db|\\.xlsx|\\.csv|\\.pdf"
+rg -n "SECRET_KEY=|DATABASE_URL=|password=|senha=|token=|\\.db|\\.sqlite|\\.xlsx|\\.csv|\\.pdf"
 ```
 
-Tambem e recomendavel ativar secret scanning no GitHub apos criar o repositorio.
+## Regra pratica
 
-## Politica de Dados
+O Git publico deve mostrar:
 
-O repositorio publico deve conter somente codigo, migrations, testes e documentacao sanitizada. Dados reais pertencem ao ambiente operacional e nao fazem parte do controle de versao publico.
+- codigo;
+- migrations;
+- testes;
+- documentacao sanitizada.
+
+O ambiente operacional deve guardar:
+
+- banco;
+- segredos;
+- backups;
+- evidencias reais de uso;
+- documentos internos.

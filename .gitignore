@@ -50,7 +50,7 @@ coverage.xml
 htmlcov/
 tmp_https_*.txt
 
-# Private legal / negotiation / authorship material
+# Private material
 docs_privados/
 docs/PRIVATE_*/
 docs/PRIVATE_*
