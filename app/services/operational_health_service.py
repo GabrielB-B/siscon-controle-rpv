@@ -57,6 +57,36 @@ def _sqlite_database_path() -> Path | None:
     return (Path(current_app.instance_path) / db_path.name).resolve()
 
 
+def _sqlite_root_shadow_info(active_database_path: Path | None) -> dict | None:
+    if not active_database_path:
+        return None
+
+    project_root = Path(current_app.root_path).parent
+    root_database_path = (project_root / "controle_rpv.db").resolve()
+    active_database_path = active_database_path.resolve()
+    root_exists = root_database_path.exists()
+
+    try:
+        root_size = root_database_path.stat().st_size if root_exists else 0
+    except OSError:
+        root_size = None
+
+    try:
+        active_size = active_database_path.stat().st_size if active_database_path.exists() else 0
+    except OSError:
+        active_size = None
+
+    return {
+        "root_database_path": str(root_database_path),
+        "root_database_exists": root_exists,
+        "root_database_size_bytes": root_size,
+        "active_database_path": str(active_database_path),
+        "active_database_size_bytes": active_size,
+        "root_database_is_active": root_database_path == active_database_path,
+        "shadow_database_present": root_exists and root_database_path != active_database_path,
+    }
+
+
 def _backup_dir() -> Path:
     return Path(current_app.root_path).parent / "backups"
 
@@ -367,6 +397,9 @@ def collect_operational_audit_report() -> dict:
         dataset = _coletar_dataset_bi()
         cards = _cards_bi(dataset)
 
+    active_database_path = _sqlite_database_path()
+    shadow_database_info = _sqlite_root_shadow_info(active_database_path)
+
     rpvs_ativos = [
         registro
         for registro in RegistroRPV.query.options(joinedload(RegistroRPV.situacao_empenho)).filter_by(ativo=True).all()
@@ -446,6 +479,18 @@ def collect_operational_audit_report() -> dict:
     issues.extend(_coletar_duplicidades_dativos())
     issues.extend(_coletar_duplicidades_rpvs())
     issues.extend(_telefones_fora_do_padrao())
+    if shadow_database_info and shadow_database_info["shadow_database_present"]:
+        issues.append(
+            _issue(
+                "warning",
+                "sqlite_root_shadow_database_present",
+                "Arquivo SQLite na raiz do projeto detectado fora do banco ativo configurado.",
+                root_database_path=shadow_database_info["root_database_path"],
+                active_database_path=shadow_database_info["active_database_path"],
+                root_database_size_bytes=shadow_database_info["root_database_size_bytes"],
+                active_database_size_bytes=shadow_database_info["active_database_size_bytes"],
+            )
+        )
 
     issues.sort(key=lambda issue: (-SEVERITY_ORDER.get(issue["severity"], 0), issue["code"]))
 
@@ -454,8 +499,9 @@ def collect_operational_audit_report() -> dict:
     return {
         "status": status,
         "generated_at": _utc_iso_now(),
-        "database_path": str(_sqlite_database_path() or ""),
-        "database_exists": bool((_sqlite_database_path() or Path()).exists()) if _sqlite_database_path() else True,
+        "database_path": str(active_database_path or ""),
+        "database_exists": bool((active_database_path or Path()).exists()) if active_database_path else True,
+        "shadow_database": shadow_database_info,
         "backup_dir": str(_backup_dir()),
         "backup_dir_exists": _backup_dir().exists(),
         "summary": {
@@ -466,6 +512,7 @@ def collect_operational_audit_report() -> dict:
             "linhas_dataset_bi": len(dataset),
             "origens_bi": dict(Counter(row["origem_chave"] for row in dataset)),
             "issues_por_severidade": dict(Counter(issue["severity"] for issue in issues)),
+            "shadow_database_present": bool(shadow_database_info and shadow_database_info["shadow_database_present"]),
         },
         "financial_totals": {
             "banco": {

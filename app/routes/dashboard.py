@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 from io import StringIO
+from typing import Callable
 
 from flask import Blueprint, Response, render_template, request, url_for
 from flask_login import current_user, login_required
@@ -10,7 +11,21 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import joinedload
 from unidecode import unidecode
 
-from app.models import DativoCI, DativoItem, DativoLote, Processo, RegistroRPV, RPVPendenciaDocumento, User
+from app.models import DativoCI, DativoItem, DativoLote, Processo, RegistroRPV, RPVPendenciaDocumento
+from app.services.bi_beneficiary_service import BIBeneficiaryService
+from app.services.bi_context_service import BIContextService
+from app.services.bi_dataset_service import BIDatasetService
+from app.services.bi_export_service import BIExportService
+from app.services.bi_filter_service import BIFilterService
+from app.services.bi_operational_metrics_service import BIOperationalMetricsService
+from app.services.cotas_rpv_service import CotasRPVService
+from app.utils.cota_groups import (
+    GRUPOS_COTA_META as GRUPOS_COTA_BI,
+    GRUPOS_COTA_OPCOES,
+    GRUPOS_COTA_ORDEM,
+    classificar_grupo_cota as _classificar_grupo_cota_shared,
+    meta_grupo_cota as _meta_grupo_cota_shared,
+)
 from app.utils.domain_profile import get_domain_profile
 from app.utils.formatters import formatar_documento_br
 from app.utils.normalizers import normalizar_documento
@@ -40,39 +55,12 @@ PAGAMENTO_BI = {
     "pagos": "Com data de pagamento",
     "sem_data": "Sem data de pagamento",
 }
-VISOES_BI = {
+VISOES_BI_LABELS = {
     "operacional": "Operacional",
     "conferencia": "Conferencia",
 }
-GRUPOS_COTA_BI = {
-    "pessoal": {
-        "label": "Pessoal",
-        "descricao": "RPV pessoal e trabalhista",
-        "css_class": "stack-segment-strong",
-        "chart_class": "chart-column-bar-secondary",
-        "progress_class": "progress-bar-secondary",
-    },
-    "comum": {
-        "label": "Comum",
-        "descricao": "RPVs comuns e dativos",
-        "css_class": "stack-segment-soft",
-        "chart_class": "chart-column-bar",
-        "progress_class": "progress-bar",
-    },
-    "pericial": {
-        "label": "Pericial",
-        "descricao": "RPVs periciais",
-        "css_class": "stack-segment-amber",
-        "chart_class": "chart-column-bar-amber",
-        "progress_class": "progress-bar-amber",
-    },
-}
-GRUPOS_COTA_ORDEM = ("pessoal", "comum", "pericial")
-GRUPOS_COTA_OPCOES = {
-    "todos": "Todos os grupos",
-    "pessoal": "Pessoal",
-    "comum": "Comum",
-    "pericial": "Pericial",
+VISOES_BI_NAVEGACAO = {
+    "operacional": "Operacional",
 }
 JANELAS_GRAFICO_BI = {
     6: "6 meses",
@@ -177,7 +165,7 @@ def _inteiro_positivo(valor: str | int | None, padrao: int = 1) -> int:
 
 def _visao_bi(valor: str | None) -> str:
     chave = str(valor or "").strip().lower()
-    if chave in VISOES_BI:
+    if chave in VISOES_BI_LABELS:
         return chave
     return "operacional"
 
@@ -720,22 +708,11 @@ def _match_pagamento_bi(data_pagamento, filtro: str) -> bool:
 
 
 def _meta_grupo_cota(chave: str) -> dict:
-    return GRUPOS_COTA_BI.get(chave, GRUPOS_COTA_BI["comum"])
+    return _meta_grupo_cota_shared(chave)
 
 
 def _classificar_grupo_cota(tipo_nome: str | None, origem_chave: str | None = None) -> str:
-    if origem_chave in {"dativo_com_irrf", "dativo_sem_irrf"}:
-        return "comum"
-
-    tipo_normalizado = _normalizar_texto(tipo_nome)
-
-    if "pessoal" in tipo_normalizado or "trabalhist" in tipo_normalizado:
-        return "pessoal"
-
-    if "pericial" in tipo_normalizado or "periciais" in tipo_normalizado:
-        return "pericial"
-
-    return "comum"
+    return _classificar_grupo_cota_shared(tipo_nome, origem_chave)
 
 
 def _proxima_competencia(competencia: str | None) -> str:
@@ -882,22 +859,11 @@ def _periodo_pagamentos_bi(dataset: list[dict], filtros: dict[str, str]) -> str:
 
 
 def _filtros_beneficiarios_bi_da_requisicao() -> dict[str, str | int | bool]:
-    busca = request.args.get("beneficiario_q", "").strip()
-    pagina = _inteiro_positivo(request.args.get("pagina"), 1)
-    fiscal = request.args.get("fiscal", "todos").strip() or "todos"
-    if fiscal not in BENEFICIARIOS_BI_FISCAL:
-        fiscal = "todos"
-    explorar = (
-        str(request.args.get("beneficiarios_explorar", "") or "").strip() == "1"
-        or bool(busca)
-        or pagina > 1
+    return BIFilterService.normalize_beneficiary_filters(
+        request.args,
+        integer_normalizer=_inteiro_positivo,
+        fiscal_options=BENEFICIARIOS_BI_FISCAL,
     )
-    return {
-        "q": busca,
-        "pagina": pagina,
-        "fiscal": fiscal,
-        "explorar": explorar,
-    }
 
 
 def _url_bi_beneficiarios_pagina(
@@ -1080,56 +1046,15 @@ def _query_registros_bi(
     *,
     visao: str = "operacional",
 ):
-    query = (
-        RegistroRPV.query.options(
-            joinedload(RegistroRPV.elaborador),
-            joinedload(RegistroRPV.tipo_rpv),
-            joinedload(RegistroRPV.situacao_imposto),
-            joinedload(RegistroRPV.situacao_empenho),
-            joinedload(RegistroRPV.processo),
-        )
-        .filter(RegistroRPV.ativo.is_(True))
+    return BIDatasetService.query_registros(
+        filtros,
+        visao=visao,
+        current_user_id=getattr(current_user, "id", None),
+        visao_normalizer=_visao_bi,
+        faixa_data_pagamento_resolver=_faixa_data_pagamento_bi,
+        filtro_competencia_resolver=_filtro_competencia_operacional_rpv,
+        pagamento_normalizer=_normalizar_texto,
     )
-
-    if not filtros:
-        return query
-
-    origem = str(filtros.get("origem") or "").strip()
-    if origem not in ("", "todos", "rpv_normal"):
-        return query.filter(RegistroRPV.id == -1)
-
-    responsavel = str(filtros.get("responsavel") or "").strip()
-    if responsavel == "meus":
-        query = query.filter(RegistroRPV.elaborador_id == current_user.id)
-    elif responsavel not in ("", "todos"):
-        query = query.filter(RegistroRPV.elaborador_id == responsavel)
-
-    pagamento = _normalizar_texto(filtros.get("pagamento"))
-    visao_bi = _visao_bi(visao)
-    if visao_bi == "conferencia" or pagamento == "pagos":
-        query = query.filter(RegistroRPV.data_pagamento.isnot(None))
-    elif pagamento == "sem_data":
-        query = query.filter(RegistroRPV.data_pagamento.is_(None))
-
-    if visao_bi == "conferencia":
-        inicio, fim = _faixa_data_pagamento_bi(
-            filtros.get("competencia_inicial"),
-            filtros.get("competencia_final"),
-        )
-        if inicio:
-            query = query.filter(RegistroRPV.data_pagamento >= inicio)
-        if fim:
-            query = query.filter(RegistroRPV.data_pagamento < fim)
-    else:
-        filtro_operacional = _filtro_competencia_operacional_rpv(
-            filtros.get("competencia_inicial"),
-            filtros.get("competencia_final"),
-            pagamento=pagamento,
-        )
-        if filtro_operacional is not None:
-            query = query.filter(filtro_operacional)
-
-    return query
 
 
 def _query_dativos_bi(
@@ -1137,88 +1062,62 @@ def _query_dativos_bi(
     *,
     visao: str = "operacional",
 ):
-    query = (
-        DativoItem.query.options(
-            joinedload(DativoItem.dativo_ci).joinedload(DativoCI.responsavel),
-            joinedload(DativoItem.dativo_lote),
-            joinedload(DativoItem.situacao_rpv),
-        )
-        .filter(DativoItem.ativo.is_(True))
+    return BIDatasetService.query_dativos(
+        filtros,
+        visao=visao,
+        current_user_id=getattr(current_user, "id", None),
+        visao_normalizer=_visao_bi,
+        faixa_data_pagamento_resolver=_faixa_data_pagamento_bi,
+        filtro_competencia_resolver=_filtro_competencia_operacional_dativo,
+        pagamento_normalizer=_normalizar_texto,
     )
-
-    if not filtros:
-        return query
-
-    origem = str(filtros.get("origem") or "").strip()
-    if origem == "rpv_normal":
-        return query.filter(DativoItem.id == -1)
-    if origem == "dativo_com_irrf":
-        query = query.filter(DativoItem.grupo == "com_irrf")
-    elif origem == "dativo_sem_irrf":
-        query = query.filter(DativoItem.grupo == "sem_irrf")
-
-    responsavel = str(filtros.get("responsavel") or "").strip()
-    if responsavel == "meus":
-        query = query.join(DativoItem.dativo_ci).filter(DativoCI.responsavel_id == current_user.id)
-    elif responsavel not in ("", "todos"):
-        query = query.join(DativoItem.dativo_ci).filter(DativoCI.responsavel_id == responsavel)
-
-    pagamento = _normalizar_texto(filtros.get("pagamento"))
-    visao_bi = _visao_bi(visao)
-    if visao_bi == "conferencia" or pagamento == "pagos":
-        query = query.filter(DativoItem.data_pagamento.isnot(None))
-    elif pagamento == "sem_data":
-        query = query.filter(DativoItem.data_pagamento.is_(None))
-
-    if visao_bi == "conferencia":
-        inicio, fim = _faixa_data_pagamento_bi(
-            filtros.get("competencia_inicial"),
-            filtros.get("competencia_final"),
-        )
-        if inicio:
-            query = query.filter(DativoItem.data_pagamento >= inicio)
-        if fim:
-            query = query.filter(DativoItem.data_pagamento < fim)
-    else:
-        filtro_operacional = _filtro_competencia_operacional_dativo(
-            filtros.get("competencia_inicial"),
-            filtros.get("competencia_final"),
-            pagamento=pagamento,
-        )
-        if filtro_operacional is not None:
-            query = query.filter(filtro_operacional)
-
-    return query
 
 
 def _coletar_dataset_bi(
     filtros: dict[str, str] | None = None,
     *,
     visao: str = "operacional",
+    ordenar: bool = False,
 ) -> list[dict]:
-    registros = _query_registros_bi(filtros, visao=visao).all()
-    dativo_items = _query_dativos_bi(filtros, visao=visao).all()
+    return BIDatasetService.collect_dataset(
+        filtros,
+        visao=visao,
+        ordenar=ordenar,
+        current_user_id=getattr(current_user, "id", None),
+        visao_normalizer=_visao_bi,
+        faixa_data_pagamento_resolver=_faixa_data_pagamento_bi,
+        filtro_competencia_rpv_resolver=_filtro_competencia_operacional_rpv,
+        filtro_competencia_dativo_resolver=_filtro_competencia_operacional_dativo,
+        pagamento_normalizer=_normalizar_texto,
+        map_rpv=_registro_bi_rpv,
+        map_dativo=_registro_bi_dativo,
+    )
 
-    dataset = [
-        _registro_bi_rpv(registro)
-        for registro in registros
-        if not getattr(registro, "status_principal_cancelado", False)
-    ]
-    dataset.extend(
-        _registro_bi_dativo(item)
-        for item in dativo_items
-        if not getattr(item, "status_principal_cancelado", False)
+
+def _filtros_memoria_bi(filtros: dict[str, str] | None) -> dict[str, str]:
+    return BIFilterService.memory_filters(
+        filtros,
+        text_normalizer=_normalizar_texto,
     )
-    dataset.sort(
-        key=lambda row: (
-            row["competencia"] or "",
-            row["data_pagamento"] or date.min,
-            row["valor_bruto"],
-            row["nome"],
-        ),
-        reverse=True,
+
+
+def _filtrar_dataset_bi_em_memoria(
+    dataset: list[dict],
+    *,
+    texto: str,
+    grupo_cota: str,
+    tipo: str,
+    reinf: str,
+) -> list[dict]:
+    return BIDatasetService.filter_dataset_in_memory(
+        dataset,
+        texto=texto,
+        grupo_cota=grupo_cota,
+        tipo=tipo,
+        reinf=reinf,
+        reinf_matcher=_match_reinf_bi,
+        text_normalizer=_normalizar_texto,
     )
-    return dataset
 
 
 def _filtrar_dataset_bi(
@@ -1227,67 +1126,38 @@ def _filtrar_dataset_bi(
     *,
     visao: str = "operacional",
 ) -> list[dict]:
-    texto = _normalizar_texto(filtros.get("q"))
-    competencia_inicial = _competencia_normalizada(filtros.get("competencia_inicial"))
-    competencia_final = _competencia_normalizada(filtros.get("competencia_final"))
-    origem = filtros.get("origem", "todos")
-    grupo_cota = filtros.get("grupo_cota", "todos")
-    tipo = str(filtros.get("tipo", "")).strip()
-    reinf = filtros.get("reinf", "todos")
-    responsavel = filtros.get("responsavel", "todos")
-    pagamento = filtros.get("pagamento", "todos")
-    visao_bi = _visao_bi(visao)
+    filtros_memoria = _filtros_memoria_bi(filtros)
+    return BIDatasetService.filter_dataset(
+        dataset,
+        filtros,
+        memory_filters=filtros_memoria,
+        reinf_matcher=_match_reinf_bi,
+        text_normalizer=_normalizar_texto,
+    )
 
-    filtrados = []
 
-    for row in dataset:
-        if visao_bi == "conferencia" and not row["competencia_pagamento"]:
-            continue
-
-        if origem not in ("", "todos") and row["origem_chave"] != origem:
-            continue
-
-        if grupo_cota not in ("", "todos") and row["grupo_cota"] != grupo_cota:
-            continue
-
-        if tipo and row["tipo"] != tipo:
-            continue
-
-        if not _match_responsavel_bi(row["responsavel_id"], responsavel):
-            continue
-
-        if not _match_pagamento_bi(row["data_pagamento"], pagamento):
-            continue
-
-        competencia_filtro = (
-            row["competencia_pagamento"]
-            if visao_bi == "conferencia"
-            else row["competencia"]
-        )
-        if not _competencia_no_intervalo(
-            competencia_filtro,
-            competencia_inicial,
-            competencia_final,
-        ):
-            continue
-
-        if not _match_reinf_bi(row["reinf_status"], reinf):
-            continue
-
-        if texto:
-            valores_busca = (
-                row["nome_normalizado"],
-                row["documento_normalizado"],
-                _normalizar_texto(row["processo"]),
-                _normalizar_texto(row["ci"]),
-                _normalizar_texto(row["tipo"]),
-            )
-            if not any(texto in valor for valor in valores_busca):
-                continue
-
-        filtrados.append(row)
-
-    return filtrados
+def _carregar_dataset_bi_filtrado(
+    filtros: dict[str, str] | None = None,
+    *,
+    visao: str = "operacional",
+    ordenar: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    return BIDatasetService.load_filtered_dataset(
+        filtros,
+        visao=visao,
+        ordenar=ordenar,
+        current_user_id=getattr(current_user, "id", None),
+        visao_normalizer=_visao_bi,
+        faixa_data_pagamento_resolver=_faixa_data_pagamento_bi,
+        filtro_competencia_rpv_resolver=_filtro_competencia_operacional_rpv,
+        filtro_competencia_dativo_resolver=_filtro_competencia_operacional_dativo,
+        pagamento_normalizer=_normalizar_texto,
+        map_rpv=_registro_bi_rpv,
+        map_dativo=_registro_bi_dativo,
+        memory_filters=_filtros_memoria_bi(filtros or {}),
+        reinf_matcher=_match_reinf_bi,
+        text_normalizer=_normalizar_texto,
+    )
 
 
 def _aplicar_percentuais(items: list[dict], campo_valor: str = "valor_total") -> list[dict]:
@@ -1547,41 +1417,20 @@ def _linhas_dativos_pagos(dataset: list[dict]) -> list[dict]:
 
 
 def _resumo_dativos_competencia(dataset: list[dict], competencia_referencia: str | None = None) -> dict:
-    competencia_referencia = _competencia_normalizada(competencia_referencia) or _competencia_atual()
-    linhas = [
-        row for row in _linhas_dativos_pagos(dataset) if row["competencia"] == competencia_referencia
-    ]
+    return BIOperationalMetricsService.resumo_dativos_competencia(
+        dataset,
+        competencia_referencia,
+    )
 
-    grupos_base = [
-        ("dativo_sem_irrf", "Dativos sem IRRF", "stack-segment-soft"),
-        ("dativo_com_irrf", "Dativos com IRRF", "stack-segment-strong"),
-    ]
-    total_valor = sum((row["valor_bruto"] for row in linhas), Decimal("0.00"))
-    total_quantidade = len(linhas)
-    grupos = []
 
-    for chave, label, css_class in grupos_base:
-        linhas_grupo = [row for row in linhas if row["origem_chave"] == chave]
-        valor_total = sum((row["valor_bruto"] for row in linhas_grupo), Decimal("0.00"))
-        quantidade = len(linhas_grupo)
-        percentual = float((valor_total / total_valor) * Decimal("100")) if total_valor > 0 else 0.0
-        grupos.append(
-            {
-                "label": label,
-                "css_class": css_class,
-                "valor_total": valor_total,
-                "quantidade": quantidade,
-                "percentual": percentual,
-            }
-        )
-
-    return {
-        "competencia": competencia_referencia,
-        "competencia_legivel": _competencia_legivel(competencia_referencia),
-        "total_valor": total_valor,
-        "total_quantidade": total_quantidade,
-        "grupos": grupos,
-    }
+def _resumo_dativos_competencia_projetado(
+    projecao: dict,
+    competencia_referencia: str | None = None,
+) -> dict:
+    return BIOperationalMetricsService.resumo_dativos_competencia_projetado(
+        projecao,
+        competencia_referencia,
+    )
 
 
 def _resumo_pendencias_bi(dataset: list[dict]) -> dict:
@@ -1626,72 +1475,17 @@ def _resumo_pendencias_bi(dataset: list[dict]) -> dict:
 
 
 def _serie_dativos_ultimas_competencias(dataset: list[dict], limite: int = 6) -> list[dict]:
-    agrupado = defaultdict(
-        lambda: {
-            "dativo_sem_irrf": {"valor_total": Decimal("0.00"), "quantidade": 0},
-            "dativo_com_irrf": {"valor_total": Decimal("0.00"), "quantidade": 0},
-        }
+    return BIOperationalMetricsService.serie_dativos_ultimas_competencias(
+        dataset,
+        limite=limite,
     )
 
-    for row in _linhas_dativos_pagos(dataset):
-        competencia = row["competencia"] or (
-            row["data_pagamento"].strftime("%Y-%m") if row["data_pagamento"] else ""
-        )
-        if not competencia:
-            continue
-        grupo = agrupado[competencia][row["origem_chave"]]
-        grupo["valor_total"] += row["valor_bruto"]
-        grupo["quantidade"] += 1
 
-    competencias = sorted(agrupado.keys())[-limite:]
-    totais = []
-
-    for competencia in competencias:
-        dados_competencia = agrupado[competencia]
-        valor_sem_irrf = dados_competencia["dativo_sem_irrf"]["valor_total"]
-        valor_com_irrf = dados_competencia["dativo_com_irrf"]["valor_total"]
-        quantidade_sem_irrf = dados_competencia["dativo_sem_irrf"]["quantidade"]
-        quantidade_com_irrf = dados_competencia["dativo_com_irrf"]["quantidade"]
-        valor_total = valor_sem_irrf + valor_com_irrf
-        quantidade_total = quantidade_sem_irrf + quantidade_com_irrf
-
-        totais.append(
-            {
-                "competencia": competencia,
-                "label": _competencia_legivel(competencia),
-                "valor_total": valor_total,
-                "quantidade_total": quantidade_total,
-                "segmentos": [
-                    {
-                        "label": LABEL_SEM_IRRF,
-                        "css_class": "stack-segment-soft",
-                        "valor_total": valor_sem_irrf,
-                        "quantidade": quantidade_sem_irrf,
-                    },
-                    {
-                        "label": "Com IRRF",
-                        "css_class": "stack-segment-strong",
-                        "valor_total": valor_com_irrf,
-                        "quantidade": quantidade_com_irrf,
-                    },
-                ],
-            }
-        )
-
-    maior_total = max((item["valor_total"] for item in totais), default=Decimal("0.00"))
-
-    for item in totais:
-        item["altura_percentual"] = (
-            float((item["valor_total"] / maior_total) * Decimal("100")) if maior_total > 0 else 0.0
-        )
-        for segmento in item["segmentos"]:
-            segmento["percentual_interno"] = (
-                float((segmento["valor_total"] / item["valor_total"]) * Decimal("100"))
-                if item["valor_total"] > 0
-                else 0.0
-            )
-
-    return totais
+def _serie_dativos_ultimas_competencias_projetada(projecao: dict, limite: int = 6) -> list[dict]:
+    return BIOperationalMetricsService.serie_dativos_ultimas_competencias_projetada(
+        projecao,
+        limite=limite,
+    )
 
 
 def _top_cis_dativos_pagos(dataset: list[dict], limite: int = 6) -> list[dict]:
@@ -1721,126 +1515,43 @@ def _resumo_grupos_cota(
     dataset: list[dict],
     filtros: dict[str, str] | None = None,
 ) -> dict:
-    linhas_pagas = _linhas_bi_pagas(dataset)
-    linhas_em_aberto = _linhas_bi_em_aberto(dataset)
-    competencias = _competencias_pagamento_disponiveis(dataset)
-    competencia_referencia = _competencia_referencia_bi(dataset, filtros)
-    proxima_competencia = _proxima_competencia(competencia_referencia)
-    ano_referencia = (competencia_referencia or _competencia_atual())[:4]
-    historico_pago = defaultdict(
-        lambda: {
-            chave: {"valor_total": Decimal("0.00"), "quantidade": 0}
-            for chave in GRUPOS_COTA_ORDEM
-        }
-    )
-    historico_aberto = defaultdict(
-        lambda: {
-            chave: {"valor_total": Decimal("0.00"), "quantidade": 0}
-            for chave in GRUPOS_COTA_ORDEM
-        }
+    return BIOperationalMetricsService.resumo_grupos_cota(dataset, filtros)
+
+
+def _competencia_referencia_bi_projetada(
+    projecao: dict,
+    filtros: dict[str, str] | None = None,
+) -> str:
+    competencia_atual = _competencia_atual()
+    competencias_disponiveis = sorted(projecao.get("competencias_disponiveis", []))
+    competencias_pagamento = sorted(projecao.get("competencias_pagas", []))
+    ultima_competencia_disponivel = (
+        competencias_pagamento[-1]
+        if competencias_pagamento
+        else (competencias_disponiveis[-1] if competencias_disponiveis else "")
     )
 
-    for row in linhas_pagas:
-        competencia = row["competencia_pagamento"]
-        if not competencia:
-            continue
-        grupo = historico_pago[competencia][row["grupo_cota"]]
-        grupo["valor_total"] += row["valor_pago"]
-        grupo["quantidade"] += 1
+    if _filtros_bi_tem_competencia_explicita(filtros):
+        return ultima_competencia_disponivel or competencia_atual
 
-    for row in linhas_em_aberto:
-        competencia = row["competencia_cadastro"]
-        if not competencia:
-            continue
-        grupo = historico_aberto[competencia][row["grupo_cota"]]
-        grupo["valor_total"] += row["valor_previsto_aberto"]
-        grupo["quantidade"] += 1
+    if not ultima_competencia_disponivel:
+        return competencia_atual
 
-    janela_previsao = competencias[-3:] if competencias else []
-    grupos = []
-    total_mes_pago = Decimal("0.00")
-    total_ano_pago = Decimal("0.00")
-    total_em_aberto = Decimal("0.00")
-    total_previsao = Decimal("0.00")
+    return (
+        competencia_atual
+        if competencia_atual >= ultima_competencia_disponivel
+        else ultima_competencia_disponivel
+    )
 
-    for chave in GRUPOS_COTA_ORDEM:
-        meta = _meta_grupo_cota(chave)
-        valor_mes_pago = historico_pago[competencia_referencia][chave]["valor_total"]
-        quantidade_mes_pago = historico_pago[competencia_referencia][chave]["quantidade"]
-        valor_ano_pago = sum(
-            dados[chave]["valor_total"]
-            for competencia, dados in historico_pago.items()
-            if competencia.startswith(ano_referencia)
-        )
-        quantidade_ano_pago = sum(
-            dados[chave]["quantidade"]
-            for competencia, dados in historico_pago.items()
-            if competencia.startswith(ano_referencia)
-        )
-        valor_em_aberto = sum(
-            dados[chave]["valor_total"] for dados in historico_aberto.values()
-        )
-        quantidade_em_aberto = sum(
-            dados[chave]["quantidade"] for dados in historico_aberto.values()
-        )
 
-        if janela_previsao:
-            valor_previsao = sum(
-                (
-                    historico_pago[competencia][chave]["valor_total"]
-                    for competencia in janela_previsao
-                ),
-                Decimal("0.00"),
-            ) / Decimal(len(janela_previsao))
-            valor_previsao = valor_previsao.quantize(Decimal("0.01"))
-        else:
-            valor_previsao = Decimal("0.00")
-
-        total_mes_pago += valor_mes_pago
-        total_ano_pago += valor_ano_pago
-        total_em_aberto += valor_em_aberto
-        total_previsao += valor_previsao
-
-        grupos.append(
-            {
-                "chave": chave,
-                "label": meta["label"],
-                "descricao": meta["descricao"],
-                "css_class": meta["css_class"],
-                "chart_class": meta["chart_class"],
-                "progress_class": meta["progress_class"],
-                "valor_mes_pago": valor_mes_pago,
-                "quantidade_mes_pago": quantidade_mes_pago,
-                "valor_ano_pago": valor_ano_pago,
-                "quantidade_ano_pago": quantidade_ano_pago,
-                "valor_em_aberto": valor_em_aberto,
-                "quantidade_em_aberto": quantidade_em_aberto,
-                "valor_previsao": valor_previsao,
-                "percentual_pago_mes": 0.0,
-            }
-        )
-
-    for grupo in grupos:
-        grupo["percentual_pago_mes"] = (
-            float((grupo["valor_mes_pago"] / total_mes_pago) * Decimal("100"))
-            if total_mes_pago > 0
-            else 0.0
-        )
-
-    return {
-        "competencia_referencia": competencia_referencia,
-        "competencia_legivel": _competencia_legivel(competencia_referencia),
-        "proxima_competencia": proxima_competencia,
-        "proxima_competencia_legivel": (
-            _competencia_legivel(proxima_competencia) if proxima_competencia else "proximo mes"
-        ),
-        "ano_referencia": ano_referencia,
-        "total_mes_pago": total_mes_pago,
-        "total_ano_pago": total_ano_pago,
-        "total_em_aberto": total_em_aberto,
-        "total_previsao": total_previsao,
-        "grupos": grupos,
-    }
+def _resumo_grupos_cota_projetado(
+    projecao: dict,
+    filtros: dict[str, str] | None = None,
+) -> dict:
+    return BIOperationalMetricsService.resumo_grupos_cota_projetado(
+        projecao,
+        filtros,
+    )
 
 
 def _series_grupos_cota_bi(
@@ -1850,153 +1561,41 @@ def _series_grupos_cota_bi(
     janela_meses: int = 6,
     filtros: dict[str, str] | None = None,
 ) -> list[dict]:
-    competencias = _janela_competencias(
-        resumo_grupos.get("competencia_referencia"),
-        janela_meses,
+    return BIOperationalMetricsService.series_grupos_cota(
+        dataset,
+        resumo_grupos,
+        janela_meses=janela_meses,
+        filtros=filtros,
     )
-    linhas_pagas = _linhas_bi_pagas(dataset)
-    grupos_resumo = {grupo["chave"]: grupo for grupo in resumo_grupos.get("grupos", [])}
-    grupos = []
 
-    for chave in _grupos_cota_visiveis(filtros):
-        meta = _meta_grupo_cota(chave)
-        resumo_grupo = grupos_resumo.get(chave, {})
-        serie = []
-        maior_valor = Decimal("0.00")
-        valor_total_janela = Decimal("0.00")
-        quantidade_total_janela = 0
 
-        for competencia in competencias:
-            linhas_competencia = [
-                row
-                for row in linhas_pagas
-                if row["grupo_cota"] == chave and row["competencia_pagamento"] == competencia
-            ]
-            valor_total = sum((row["valor_pago"] for row in linhas_competencia), Decimal("0.00"))
-            quantidade = len(linhas_competencia)
-            valor_total_janela += valor_total
-            quantidade_total_janela += quantidade
-            maior_valor = max(maior_valor, valor_total)
-            serie.append(
-                {
-                    "competencia": competencia,
-                    "label": _competencia_legivel(competencia),
-                    "valor_total": valor_total,
-                    "quantidade": quantidade,
-                    "percentual": 0.0,
-                }
-            )
-
-        for item in serie:
-            item["percentual"] = (
-                float((item["valor_total"] / maior_valor) * Decimal("100"))
-                if maior_valor > 0
-                else 0.0
-            )
-
-        media_mensal = (
-            (valor_total_janela / Decimal(len(competencias))).quantize(Decimal("0.01"))
-            if competencias
-            else Decimal("0.00")
-        )
-        melhor_mes = (
-            max(serie, key=lambda item: item["valor_total"], default=None)
-            if valor_total_janela > 0
-            else None
-        )
-
-        grupos.append(
-            {
-                "chave": chave,
-                "label": meta["label"],
-                "descricao": meta["descricao"],
-                "css_class": meta["css_class"],
-                "chart_class": meta["chart_class"],
-                "progress_class": meta["progress_class"],
-                "serie": serie,
-                "valor_total_janela": valor_total_janela,
-                "quantidade_total_janela": quantidade_total_janela,
-                "media_mensal": media_mensal,
-                "valor_mes_pago": resumo_grupo.get("valor_mes_pago", Decimal("0.00")),
-                "valor_ano_pago": resumo_grupo.get("valor_ano_pago", Decimal("0.00")),
-                "valor_em_aberto": resumo_grupo.get("valor_em_aberto", Decimal("0.00")),
-                "percentual_pago_mes": resumo_grupo.get("percentual_pago_mes", 0.0),
-                "valor_previsao": resumo_grupo.get("valor_previsao", Decimal("0.00")),
-                "tem_dados": valor_total_janela > 0,
-                "melhor_mes_label": melhor_mes["label"] if melhor_mes else "-",
-                "melhor_mes_valor": melhor_mes["valor_total"] if melhor_mes else Decimal("0.00"),
-            }
-        )
-
-    return grupos
+def _series_grupos_cota_bi_projetado(
+    projecao: dict,
+    resumo_grupos: dict,
+    *,
+    janela_meses: int = 6,
+    filtros: dict[str, str] | None = None,
+) -> list[dict]:
+    return BIOperationalMetricsService.series_grupos_cota_projetado(
+        projecao,
+        resumo_grupos,
+        janela_meses=janela_meses,
+        filtros=filtros,
+    )
 
 
 def _serie_mensal_grupos_cota(dataset: list[dict], limite: int = 12) -> list[dict]:
-    agrupado = defaultdict(
-        lambda: {
-            chave: {"valor_total": Decimal("0.00"), "quantidade": 0}
-            for chave in GRUPOS_COTA_ORDEM
-        }
+    return BIOperationalMetricsService.serie_mensal_grupos_cota(
+        dataset,
+        limite=limite,
     )
 
-    for row in _linhas_bi_pagas(dataset):
-        competencia = row["competencia_pagamento"]
-        if not competencia:
-            continue
-        grupo = agrupado[competencia][row["grupo_cota"]]
-        grupo["valor_total"] += row["valor_pago"]
-        grupo["quantidade"] += 1
 
-    competencias = sorted(agrupado.keys())[-limite:]
-    totais = []
-
-    for competencia in competencias:
-        dados_competencia = agrupado[competencia]
-        segmentos = []
-        valor_total = Decimal("0.00")
-        quantidade_total = 0
-
-        for chave in GRUPOS_COTA_ORDEM:
-            meta = _meta_grupo_cota(chave)
-            valor_grupo = dados_competencia[chave]["valor_total"]
-            quantidade_grupo = dados_competencia[chave]["quantidade"]
-            valor_total += valor_grupo
-            quantidade_total += quantidade_grupo
-            segmentos.append(
-                {
-                    "label": meta["label"],
-                    "css_class": meta["css_class"],
-                    "valor_total": valor_grupo,
-                    "quantidade": quantidade_grupo,
-                    "percentual_interno": 0.0,
-                }
-            )
-
-        totais.append(
-            {
-                "competencia": competencia,
-                "label": _competencia_legivel(competencia),
-                "valor_total": valor_total,
-                "quantidade_total": quantidade_total,
-                "segmentos": segmentos,
-                "altura_percentual": 0.0,
-            }
-        )
-
-    maior_total = max((item["valor_total"] for item in totais), default=Decimal("0.00"))
-
-    for item in totais:
-        item["altura_percentual"] = (
-            float((item["valor_total"] / maior_total) * Decimal("100")) if maior_total > 0 else 0.0
-        )
-        for segmento in item["segmentos"]:
-            segmento["percentual_interno"] = (
-                float((segmento["valor_total"] / item["valor_total"]) * Decimal("100"))
-                if item["valor_total"] > 0
-                else 0.0
-            )
-
-    return totais
+def _serie_mensal_grupos_cota_projetada(projecao: dict, limite: int = 12) -> list[dict]:
+    return BIOperationalMetricsService.serie_mensal_grupos_cota_projetada(
+        projecao,
+        limite=limite,
+    )
 
 
 def _acumulado_anual_por_grupo(resumo_grupos: dict) -> list[dict]:
@@ -2031,87 +1630,11 @@ def _resumo_irrf_bi(
     competencia_referencia: str | None = None,
     janela_meses: int = 6,
 ) -> dict:
-    referencia = _competencia_normalizada(competencia_referencia) or _competencia_referencia_bi(dataset)
-    competencias = _janela_competencias(referencia, janela_meses)
-    linhas_irrf = [
-        row
-        for row in _linhas_bi_pagas(dataset)
-        if row["competencia_pagamento"] and row["valor_irrf"] > 0
-    ]
-    agrupado = defaultdict(
-        lambda: {
-            "valor_total": Decimal("0.00"),
-            "quantidade": 0,
-            "beneficiarios": set(),
-        }
+    return BIOperationalMetricsService.resumo_irrf(
+        dataset,
+        competencia_referencia=competencia_referencia,
+        janela_meses=janela_meses,
     )
-
-    for row in linhas_irrf:
-        competencia = row["competencia_pagamento"]
-        dados = agrupado[competencia]
-        dados["valor_total"] += row["valor_irrf"]
-        dados["quantidade"] += 1
-        chave_beneficiario = row["documento_normalizado"] or row["nome_normalizado"]
-        if chave_beneficiario:
-            dados["beneficiarios"].add(chave_beneficiario)
-
-    serie = []
-    maior_valor = Decimal("0.00")
-
-    for competencia in competencias:
-        dados = agrupado[competencia]
-        maior_valor = max(maior_valor, dados["valor_total"])
-        serie.append(
-            {
-                "competencia": competencia,
-                "label": _competencia_legivel(competencia),
-                "valor_total": dados["valor_total"],
-                "quantidade": dados["quantidade"],
-                "beneficiarios": len(dados["beneficiarios"]),
-                "percentual": 0.0,
-            }
-        )
-
-    for item in serie:
-        item["percentual"] = (
-            float((item["valor_total"] / maior_valor) * Decimal("100"))
-            if maior_valor > 0
-            else 0.0
-        )
-
-    acumulado_recorte = sum((row["valor_irrf"] for row in linhas_irrf), Decimal("0.00"))
-    acumulado_ano = sum(
-        (row["valor_irrf"] for row in linhas_irrf if row["competencia_pagamento"].startswith(referencia[:4])),
-        Decimal("0.00"),
-    )
-    irrf_mes = agrupado[referencia]["valor_total"]
-    pagamentos_com_irrf = len(linhas_irrf)
-    beneficiarios_unicos = len(
-        {
-            row["documento_normalizado"] or row["nome_normalizado"]
-            for row in linhas_irrf
-            if row["documento_normalizado"] or row["nome_normalizado"]
-        }
-    )
-    media_mensal = (
-        (sum((item["valor_total"] for item in serie), Decimal("0.00")) / Decimal(len(competencias))).quantize(Decimal("0.01"))
-        if competencias
-        else Decimal("0.00")
-    )
-
-    return {
-        "competencia_referencia": referencia,
-        "competencia_legivel": _competencia_legivel(referencia),
-        "serie": serie,
-        "irrf_mes": irrf_mes,
-        "acumulado_recorte": acumulado_recorte,
-        "acumulado_ano": acumulado_ano,
-        "pagamentos_com_irrf": pagamentos_com_irrf,
-        "beneficiarios_unicos": beneficiarios_unicos,
-        "media_mensal": media_mensal,
-        "janela_meses": _janela_meses_bi(janela_meses),
-        "tem_dados": acumulado_recorte > 0,
-    }
 
 
 def _conferencia_bi(dataset: list[dict]) -> dict:
@@ -2322,81 +1845,13 @@ def _agrupar_beneficiarios_fluxo_bi(
     dataset: list[dict],
     competencias_limite: int = 4,
 ) -> list[dict]:
-    agrupado = {}
-
-    for row in _linhas_bi_pagas(dataset):
-        chave = row["documento_normalizado"] or row["nome_normalizado"]
-        if not chave:
-            continue
-
-        dados = agrupado.setdefault(
-            chave,
-            {
-                "label": row["nome"],
-                "documento": row["documento_limpo"],
-                "quantidade": 0,
-                "valor_total": Decimal("0.00"),
-                "valor_com_irrf": Decimal("0.00"),
-                "valor_sem_irrf": Decimal("0.00"),
-                "valor_irrf_total": Decimal("0.00"),
-                "competencias": defaultdict(
-                    lambda: {
-                        "valor_total": Decimal("0.00"),
-                        "valor_com_irrf": Decimal("0.00"),
-                        "valor_sem_irrf": Decimal("0.00"),
-                        "valor_irrf": Decimal("0.00"),
-                        "quantidade": 0,
-                    }
-                ),
-            },
-        )
-
-        dados["quantidade"] += 1
-        dados["valor_total"] += row["valor_pago"]
-        if row["tem_irrf"]:
-            dados["valor_com_irrf"] += row["valor_pago"]
-        else:
-            dados["valor_sem_irrf"] += row["valor_pago"]
-        dados["valor_irrf_total"] += row["valor_irrf"]
-
-        if row["competencia_pagamento"]:
-            competencia = dados["competencias"][row["competencia_pagamento"]]
-            competencia["valor_total"] += row["valor_pago"]
-            competencia["quantidade"] += 1
-            competencia["valor_irrf"] += row["valor_irrf"]
-            if row["tem_irrf"]:
-                competencia["valor_com_irrf"] += row["valor_pago"]
-            else:
-                competencia["valor_sem_irrf"] += row["valor_pago"]
-
-    serie = list(agrupado.values())
-    serie.sort(
-        key=lambda item: (item["valor_total"], item["quantidade"], item["label"]),
-        reverse=True,
+    return BIBeneficiaryService.aggregate_paid_flow(
+        dataset,
+        paid_rows_loader=_linhas_bi_pagas,
+        competencia_labeler=_competencia_legivel,
+        percent_applicator=_aplicar_percentuais,
+        competencias_limite=competencias_limite,
     )
-
-    for item in serie:
-        competencias = sorted(item["competencias"].keys(), reverse=True)[:competencias_limite]
-        item["competencias"] = [
-            {
-                "competencia": competencia,
-                "label": _competencia_legivel(competencia),
-                "valor_total": item["competencias"][competencia]["valor_total"],
-                "valor_com_irrf": item["competencias"][competencia]["valor_com_irrf"],
-                "valor_sem_irrf": item["competencias"][competencia]["valor_sem_irrf"],
-                "valor_irrf": item["competencias"][competencia]["valor_irrf"],
-                "quantidade": item["competencias"][competencia]["quantidade"],
-            }
-            for competencia in competencias
-        ]
-        item["tem_retencao"] = item["valor_irrf_total"] > 0
-        item["observacao_fiscal"] = (
-            "Teve imposto retido no recorte e deve aparecer na observacao fiscal."
-            if item["tem_retencao"]
-            else "Sem imposto retido no recorte atual."
-        )
-
-    return _aplicar_percentuais(serie)
 
 
 def _top_beneficiarios_fluxo_mensal(
@@ -2408,42 +1863,20 @@ def _top_beneficiarios_fluxo_mensal(
 
 
 def _filtrar_beneficiarios_fluxo_bi(serie: list[dict], busca: str | None) -> list[dict]:
-    texto = _normalizar_texto(busca)
-    documento = normalizar_documento(busca)
-    if not (texto or documento):
-        return serie
-
-    filtrados = []
-    for item in serie:
-        nome = _normalizar_texto(item.get("label"))
-        documento_item = normalizar_documento(item.get("documento"))
-        if texto and (texto in nome or texto in _normalizar_texto(item.get("documento"))):
-            filtrados.append(item)
-            continue
-        if documento and documento in documento_item:
-            filtrados.append(item)
-
-    return filtrados
+    return BIBeneficiaryService.filter_flow(
+        serie,
+        busca,
+        text_normalizer=_normalizar_texto,
+        document_normalizer=normalizar_documento,
+    )
 
 
 def _filtrar_beneficiarios_fiscal_bi(serie: list[dict], fiscal: str | None) -> list[dict]:
-    if fiscal == "com_retencao":
-        return [item for item in serie if item.get("tem_retencao")]
-    if fiscal == "sem_retencao":
-        return [item for item in serie if not item.get("tem_retencao")]
-    return serie
+    return BIBeneficiaryService.filter_fiscal(serie, fiscal)
 
 
 def _resumo_beneficiarios_fiscal_bi(serie: list[dict]) -> dict:
-    com_retencao = [item for item in serie if item.get("tem_retencao")]
-    sem_retencao = [item for item in serie if not item.get("tem_retencao")]
-    return {
-        "total": len(serie),
-        "com_retencao": len(com_retencao),
-        "sem_retencao": len(sem_retencao),
-        "valor_total": sum((item["valor_total"] for item in serie), Decimal("0.00")),
-        "valor_irrf_total": sum((item["valor_irrf_total"] for item in serie), Decimal("0.00")),
-    }
+    return BIBeneficiaryService.summary_fiscal(serie)
 
 
 def _exploracao_beneficiarios_fluxo_bi(
@@ -2455,52 +1888,30 @@ def _exploracao_beneficiarios_fluxo_bi(
     destaque: int = BENEFICIARIOS_BI_DESTAQUE,
     pagina_tamanho: int = BENEFICIARIOS_BI_POR_PAGINA,
 ) -> dict:
-    busca_texto = str(busca or "").strip()
-    busca_ativa = bool(busca_texto)
-    fiscal = fiscal if fiscal in BENEFICIARIOS_BI_FISCAL else "todos"
-    serie_fiscal = _filtrar_beneficiarios_fiscal_bi(serie_completa, fiscal)
-    deslocamento_base = 0 if busca_ativa else min(destaque, len(serie_fiscal))
-    serie_base = _filtrar_beneficiarios_fluxo_bi(serie_fiscal, busca_texto) if busca_ativa else serie_fiscal[deslocamento_base:]
-
-    total_resultados = len(serie_base)
-    total_paginas = (
-        ((total_resultados - 1) // pagina_tamanho) + 1
-        if total_resultados > 0
-        else 1
+    return BIBeneficiaryService.exploration(
+        serie_completa,
+        busca=busca,
+        pagina=pagina,
+        fiscal=fiscal,
+        destaque=destaque,
+        pagina_tamanho=pagina_tamanho,
+        fiscal_options=BENEFICIARIOS_BI_FISCAL,
+        integer_normalizer=_inteiro_positivo,
+        text_normalizer=_normalizar_texto,
+        document_normalizer=normalizar_documento,
     )
-    pagina_atual = min(max(_inteiro_positivo(pagina, 1), 1), total_paginas)
-    inicio_indice = (pagina_atual - 1) * pagina_tamanho
-    itens = serie_base[inicio_indice:inicio_indice + pagina_tamanho]
-
-    if itens:
-        inicio_ordem = deslocamento_base + inicio_indice + 1
-        fim_ordem = inicio_ordem + len(itens) - 1
-    else:
-        inicio_ordem = 0
-        fim_ordem = 0
-
-    return {
-        "q": busca_texto,
-        "busca_ativa": busca_ativa,
-        "fiscal": fiscal,
-        "pagina": pagina_atual,
-        "pagina_tamanho": pagina_tamanho,
-        "total_resultados": total_resultados,
-        "total_paginas": total_paginas if total_resultados else 0,
-        "itens": itens,
-        "tem_itens": bool(itens),
-        "tem_anterior": pagina_atual > 1,
-        "tem_proxima": (inicio_indice + len(itens)) < total_resultados,
-        "inicio_ordem": inicio_ordem,
-        "fim_ordem": fim_ordem,
-        "restante_apos_destaque": max(len(serie_fiscal) - destaque, 0),
-        "total_geral": len(serie_fiscal),
-    }
 
 
-def _cards_bi(dataset: list[dict], resumo_grupos: dict | None = None) -> list[dict]:
+def _cards_bi(
+    dataset: list[dict],
+    resumo_grupos: dict | None = None,
+    resumo_dativos: dict | None = None,
+) -> list[dict]:
     resumo_grupos = resumo_grupos or _resumo_grupos_cota(dataset)
-    resumo_dativos = _resumo_dativos_competencia(dataset, resumo_grupos.get("competencia_referencia"))
+    resumo_dativos = resumo_dativos or _resumo_dativos_competencia(
+        dataset,
+        resumo_grupos.get("competencia_referencia"),
+    )
     linhas_pagas = _linhas_bi_pagas(dataset)
     linhas_em_aberto = _linhas_bi_em_aberto(dataset)
     total_reinf_pendente = sum(
@@ -2560,6 +1971,84 @@ def _cards_bi(dataset: list[dict], resumo_grupos: dict | None = None) -> list[di
             "nota": "Pagamentos com IRRF realizados e ainda nao resolvidos",
         },
     ]
+
+
+def _montar_contexto_bi_principal(
+    filtros: dict[str, str],
+    *,
+    visao_bi: str,
+) -> dict:
+    return BIContextService.build_main_context(
+        filtros=filtros,
+        visao_bi=visao_bi,
+        current_user_id=getattr(current_user, "id", None),
+        dataset_loader=_carregar_dataset_bi_filtrado,
+        janela_loader=_janela_meses_bi,
+        calculators=_calculadoras_contexto_bi_principal(),
+        url_builders=_url_builders_contexto_bi_principal(),
+        constants={
+            "visao_labels": VISOES_BI_LABELS,
+            "visao_navegacao": VISOES_BI_NAVEGACAO,
+            "origem_opcoes": ORIGENS_BI,
+            "pagamento_opcoes": PAGAMENTO_BI,
+            "grupo_cota_opcoes": GRUPOS_COTA_OPCOES,
+            "janela_opcoes": JANELAS_GRAFICO_BI,
+            "beneficiarios_destaque": BENEFICIARIOS_BI_DESTAQUE,
+        },
+    )
+
+
+def _calculadoras_contexto_bi_principal() -> dict[str, Callable]:
+    return {
+        "resumo_grupos": _resumo_grupos_cota,
+        "resumo_grupos_projetado": _resumo_grupos_cota_projetado,
+        "series_grupos": _series_grupos_cota_bi,
+        "series_grupos_projetado": _series_grupos_cota_bi_projetado,
+        "serie_mensal_grupos": _serie_mensal_grupos_cota,
+        "serie_mensal_grupos_projetada": _serie_mensal_grupos_cota_projetada,
+        "resumo_dativos": _resumo_dativos_competencia,
+        "resumo_dativos_projetado": _resumo_dativos_competencia_projetado,
+        "serie_dativos": _serie_dativos_ultimas_competencias,
+        "serie_dativos_projetada": _serie_dativos_ultimas_competencias_projetada,
+        "conferencia": _conferencia_bi,
+        "conferencia_pendencias_documentais": _conferencia_pendencias_documentais_bi,
+        "cards": _cards_bi,
+        "resumo_irrf": _resumo_irrf_bi,
+        "acumulado_anual": _acumulado_anual_por_grupo,
+        "pendencias": _resumo_pendencias_bi,
+        "graficos_ciclo": _graficos_ciclo_operacional_bi,
+        "sinais_operacionais": _sinais_operacionais_bi,
+        "agrupar_beneficiarios_fluxo": _agrupar_beneficiarios_fluxo_bi,
+        "periodo_pagamentos": _periodo_pagamentos_bi,
+        "agrupar_por_campo": _agrupar_por_campo,
+        "agrupar_por_campo_quantidade": _agrupar_por_campo_quantidade,
+        "linhas_bi_pagas": _linhas_bi_pagas,
+        "distribuicao_pagamento": _distribuicao_status_pagamento_bi,
+    }
+
+
+def _url_builders_contexto_bi_principal() -> dict[str, Callable]:
+    return {
+        "visao": _url_bi_com_filtros,
+        "janela": _url_bi_com_filtros,
+        "beneficiarios": _url_bi_beneficiarios_atalho,
+    }
+
+
+def _calculadoras_contexto_bi_beneficiarios() -> dict[str, Callable]:
+    return {
+        "agrupar_beneficiarios_fluxo": _agrupar_beneficiarios_fluxo_bi,
+        "resumo_beneficiarios": _resumo_beneficiarios_fiscal_bi,
+        "exploracao_beneficiarios": _exploracao_beneficiarios_fluxo_bi,
+        "periodo_pagamentos": _periodo_pagamentos_bi,
+    }
+
+
+def _url_builders_contexto_bi_beneficiarios() -> dict[str, Callable]:
+    return {
+        "bi": _url_bi_com_filtros,
+        "beneficiarios_pagina": _url_bi_beneficiarios_pagina,
+    }
 
 
 def _sinais_operacionais_bi(
@@ -2704,6 +2193,7 @@ def _resumo_pendencias_documentais_home(
 def _fila_operacional_home(
     *,
     rpvs: list[RegistroRPV],
+    dativo_cis: list[DativoCI],
     lotes_sem_irrf: list[DativoLote],
     dativo_items: list[DativoItem],
     pendencias_documentais: list[RPVPendenciaDocumento],
@@ -2736,6 +2226,25 @@ def _fila_operacional_home(
             )
         )
     ]
+    meus_cabecalhos_dativos = []
+    ids_cabecalhos_dativos = set()
+    for dativo_ci in dativo_cis:
+        if dativo_ci.id in ids_cabecalhos_dativos:
+            continue
+        if getattr(dativo_ci, "possui_movimentacao_ativa", False):
+            continue
+
+        status_ci = str(getattr(dativo_ci, "status", "aberta") or "aberta").strip().casefold()
+        relaciona_comigo = (
+            dativo_ci.responsavel_id == current_user.id
+            or dativo_ci.criado_por_id == current_user.id
+        )
+        if not relaciona_comigo:
+            continue
+
+        if status_ci in {"aberta", "descartada"}:
+            meus_cabecalhos_dativos.append(dativo_ci)
+            ids_cabecalhos_dativos.add(dativo_ci.id)
 
     itens = [
         {
@@ -2764,6 +2273,16 @@ def _fila_operacional_home(
             "nota_zero": "Nenhum item com IRRF pendente sob sua responsabilidade agora.",
             "url": url_for("dativos.itens_com_irrf"),
             "acao": "Abrir itens",
+        },
+        {
+            "label": "Dativos sem continuidade",
+            "quantidade": len(meus_cabecalhos_dativos),
+            "valor_total": Decimal("0.00"),
+            "nota": "C.I.s abertas sem continuidade, fora da sua fila ou canceladas antes do fluxo oficial",
+            "nota_zero": "Nenhum dativo sem continuidade pendente agora.",
+            "url": url_for("dativos.cabecalhos_em_revisao"),
+            "acao": "Abrir fila",
+            "kpi_secundaria": "Fila direta",
         },
         {
             "label": "Pendencias documentais",
@@ -2805,20 +2324,12 @@ def _url_bi_com_filtros(filtros: dict[str, str], **updates) -> str:
 
 
 def _filtros_bi_da_requisicao() -> dict[str, str]:
-    visao = _visao_bi(request.args.get("visao"))
-    return {
-        "visao": visao,
-        "q": request.args.get("q", "").strip(),
-        "competencia_inicial": _competencia_normalizada(request.args.get("competencia_inicial")),
-        "competencia_final": _competencia_normalizada(request.args.get("competencia_final")),
-        "origem": request.args.get("origem", "todos").strip() or "todos",
-        "grupo_cota": request.args.get("grupo_cota", "todos").strip() or "todos",
-        "tipo": request.args.get("tipo", "").strip(),
-        "reinf": request.args.get("reinf", "todos").strip() or "todos",
-        "responsavel": request.args.get("responsavel", "todos").strip() or "todos",
-        "pagamento": "pagos" if visao == "conferencia" else (request.args.get("pagamento", "todos").strip() or "todos"),
-        "janela_meses": str(_janela_meses_bi(request.args.get("janela_meses"))),
-    }
+    return BIFilterService.normalize_main_filters(
+        request.args,
+        visao_normalizer=_visao_bi,
+        competencia_normalizer=_competencia_normalizada,
+        janela_normalizer=_janela_meses_bi,
+    )
 
 
 @dashboard_bp.route("/")
@@ -2923,6 +2434,16 @@ def index():
 
     fila_operacional = _fila_operacional_home(
         rpvs=rpvs,
+        dativo_cis=(
+            DativoCI.query.options(
+                joinedload(DativoCI.responsavel),
+                joinedload(DativoCI.criado_por),
+                joinedload(DativoCI.lotes),
+                joinedload(DativoCI.itens),
+            )
+            .order_by(DativoCI.criado_em.desc())
+            .all()
+        ),
         lotes_sem_irrf=[lote for lote in lotes_sem_irrf if not getattr(lote, "status_principal_cancelado", False)],
         dativo_items=[item for item in dativo_items if not getattr(item, "status_principal_cancelado", False)],
         pendencias_documentais=pendencias_documentais,
@@ -2930,6 +2451,7 @@ def index():
     pendencias_documentais_setor = _resumo_pendencias_documentais_home(
         pendencias_documentais
     )
+    cotas_home = CotasRPVService.resumo_home(competencia=competencia_atual)
     resumo_setor_rpvs = _resumo_setor_rpvs_home(rpvs=rpvs)
     resumo_setor_dativos = _resumo_setor_dativos_home(
         lotes_sem_irrf=lotes_sem_irrf,
@@ -2977,6 +2499,7 @@ def index():
         competencia_atual_legivel=competencia_atual_legivel,
         fila_operacional=fila_operacional,
         pendencias_documentais_setor=pendencias_documentais_setor,
+        cotas_home=cotas_home,
         resumo_setor_rpvs=resumo_setor_rpvs,
         resumo_setor_dativos=resumo_setor_dativos,
         total_responsaveis_sinalizados=total_responsaveis_sinalizados,
@@ -2991,104 +2514,9 @@ def index():
 def bi():
     filtros = _filtros_bi_da_requisicao()
     visao_bi = _visao_bi(filtros.get("visao"))
-    dataset = _coletar_dataset_bi(filtros, visao=visao_bi)
-    dataset_filtrado = _filtrar_dataset_bi(dataset, filtros, visao=visao_bi)
-    janela_meses = _janela_meses_bi(filtros.get("janela_meses"))
-    resumo_grupos = _resumo_grupos_cota(dataset_filtrado, filtros)
-    conferencia_bi = _conferencia_bi(dataset_filtrado)
-    conferencia_pendencias_documentais = _conferencia_pendencias_documentais_bi(filtros)
-    cards = _cards_bi(dataset_filtrado, resumo_grupos)
-    series_grupos_cota = _series_grupos_cota_bi(
-        dataset_filtrado,
-        resumo_grupos,
-        janela_meses=janela_meses,
-        filtros=filtros,
-    )
-    resumo_irrf = _resumo_irrf_bi(
-        dataset_filtrado,
-        competencia_referencia=resumo_grupos.get("competencia_referencia"),
-        janela_meses=janela_meses,
-    )
-    serie_mensal_grupos = _serie_mensal_grupos_cota(dataset_filtrado)
-    acumulado_anual_grupos = _acumulado_anual_por_grupo(resumo_grupos)
-    pendencias_bi = _resumo_pendencias_bi(dataset_filtrado)
-    dativos_competencia = _resumo_dativos_competencia(
-        dataset_filtrado,
-        resumo_grupos.get("competencia_referencia"),
-    )
-    graficos_ciclo_operacional = _graficos_ciclo_operacional_bi(
-        resumo_grupos,
-        dativos_competencia,
-    )
-    sinais_operacionais = _sinais_operacionais_bi(
-        dataset_filtrado,
-        resumo_grupos,
-        dativos_competencia,
-    )
-    serie_dativos = _serie_dativos_ultimas_competencias(dataset_filtrado)
-    serie_beneficiarios_fluxo = _agrupar_beneficiarios_fluxo_bi(dataset_filtrado)
-    top_beneficiarios_fluxo = serie_beneficiarios_fluxo[:BENEFICIARIOS_BI_DESTAQUE]
-    top_beneficiarios_total = len(serie_beneficiarios_fluxo)
-    top_beneficiarios_periodo = _periodo_pagamentos_bi(dataset_filtrado, filtros)
-    beneficiarios_url = _url_bi_beneficiarios_atalho(filtros)
-    valores_por_status_reinf = _agrupar_por_campo(_linhas_bi_pagas(dataset_filtrado), "reinf_status")
-    registros_por_responsavel = _agrupar_por_campo_quantidade(dataset_filtrado, "responsavel")
-    registros_por_tipo = _agrupar_por_campo_quantidade(dataset_filtrado, "tipo")
-    distribuicao_pagamento = _distribuicao_status_pagamento_bi(dataset_filtrado)
-    linhas_exibidas = dataset_filtrado[:80]
-    tipos_disponiveis = sorted({row["tipo"] for row in dataset})
-    usuarios = User.query.filter_by(ativo=True).order_by(User.nome.asc()).all()
-    visao_urls = {
-        chave: _url_bi_com_filtros(filtros, visao=chave)
-        for chave in VISOES_BI
-    }
-    janela_urls = {
-        quantidade: _url_bi_com_filtros(filtros, janela_meses=quantidade)
-        for quantidade in JANELAS_GRAFICO_BI
-    }
-    export_url = url_for(
-        "dashboard.exportar_bi_conferencia_csv" if visao_bi == "conferencia" else "dashboard.exportar_bi_csv",
-        **{chave: valor for chave, valor in filtros.items() if valor}
-    )
-
     return render_template(
         "dashboard/bi.html",
-        filtros=filtros,
-        visao_bi=visao_bi,
-        visao_opcoes=VISOES_BI,
-        visao_urls=visao_urls,
-        origem_opcoes=ORIGENS_BI,
-        pagamento_opcoes=PAGAMENTO_BI,
-        grupo_cota_opcoes=GRUPOS_COTA_OPCOES,
-        janela_opcoes=JANELAS_GRAFICO_BI,
-        janela_meses=janela_meses,
-        janela_urls=janela_urls,
-        usuarios=usuarios,
-        tipo_opcoes=tipos_disponiveis,
-        cards=cards,
-        resumo_grupos=resumo_grupos,
-        conferencia_bi=conferencia_bi,
-        conferencia_pendencias_documentais=conferencia_pendencias_documentais,
-        series_grupos_cota=series_grupos_cota,
-        resumo_irrf=resumo_irrf,
-        serie_mensal_grupos=serie_mensal_grupos,
-        acumulado_anual_grupos=acumulado_anual_grupos,
-        pendencias_bi=pendencias_bi,
-        dativos_competencia=dativos_competencia,
-        graficos_ciclo_operacional=graficos_ciclo_operacional,
-        sinais_operacionais=sinais_operacionais,
-        serie_dativos=serie_dativos,
-        top_beneficiarios_fluxo=top_beneficiarios_fluxo,
-        top_beneficiarios_total=top_beneficiarios_total,
-        top_beneficiarios_periodo=top_beneficiarios_periodo,
-        beneficiarios_url=beneficiarios_url,
-        valores_por_status_reinf=valores_por_status_reinf,
-        registros_por_responsavel=registros_por_responsavel,
-        registros_por_tipo=registros_por_tipo,
-        distribuicao_pagamento=distribuicao_pagamento,
-        linhas=linhas_exibidas,
-        total_linhas=len(dataset_filtrado),
-        export_url=export_url,
+        **_montar_contexto_bi_principal(filtros, visao_bi=visao_bi),
     )
 
 
@@ -3098,67 +2526,23 @@ def bi_beneficiarios():
     filtros = _filtros_bi_da_requisicao()
     filtros_beneficiarios = _filtros_beneficiarios_bi_da_requisicao()
     visao_bi = _visao_bi(filtros.get("visao"))
-    dataset = _coletar_dataset_bi(filtros, visao=visao_bi)
-    dataset_filtrado = _filtrar_dataset_bi(dataset, filtros, visao=visao_bi)
-    serie_beneficiarios_fluxo = _agrupar_beneficiarios_fluxo_bi(dataset_filtrado)
-    resumo_beneficiarios = _resumo_beneficiarios_fiscal_bi(serie_beneficiarios_fluxo)
-    beneficiarios_exploracao = _exploracao_beneficiarios_fluxo_bi(
-        serie_beneficiarios_fluxo,
-        busca=filtros_beneficiarios.get("q"),
-        pagina=filtros_beneficiarios.get("pagina", 1),
-        fiscal=filtros_beneficiarios.get("fiscal"),
-        destaque=0,
-        pagina_tamanho=BENEFICIARIOS_BI_POR_PAGINA,
-    )
-    beneficiarios_exploracao_urls = {
-        "limpar": _url_bi_beneficiarios_pagina(filtros, None, q="", pagina=1, fiscal="todos"),
-        "anterior": (
-            _url_bi_beneficiarios_pagina(
-                filtros,
-                filtros_beneficiarios,
-                pagina=max(beneficiarios_exploracao["pagina"] - 1, 1),
-            )
-            if beneficiarios_exploracao["tem_anterior"]
-            else ""
-        ),
-        "proxima": (
-            _url_bi_beneficiarios_pagina(
-                filtros,
-                filtros_beneficiarios,
-                pagina=beneficiarios_exploracao["pagina"] + 1,
-            )
-            if beneficiarios_exploracao["tem_proxima"]
-            else ""
-        ),
-    }
-    tipos_disponiveis = sorted({row["tipo"] for row in dataset})
-    usuarios = User.query.filter_by(ativo=True).order_by(User.nome.asc()).all()
-    bi_url = url_for(
-        "dashboard.bi",
-        **{chave: valor for chave, valor in filtros.items() if valor},
-    )
-    export_url = url_for(
-        "dashboard.exportar_bi_conferencia_csv" if visao_bi == "conferencia" else "dashboard.exportar_bi_csv",
-        **{chave: valor for chave, valor in filtros.items() if valor},
-    )
-
     return render_template(
         "dashboard/beneficiarios.html",
-        filtros=filtros,
-        visao_bi=visao_bi,
-        origem_opcoes=ORIGENS_BI,
-        pagamento_opcoes=PAGAMENTO_BI,
-        grupo_cota_opcoes=GRUPOS_COTA_OPCOES,
-        usuarios=usuarios,
-        tipo_opcoes=tipos_disponiveis,
-        fiscal_opcoes=BENEFICIARIOS_BI_FISCAL,
-        resumo_beneficiarios=resumo_beneficiarios,
-        top_beneficiarios_periodo=_periodo_pagamentos_bi(dataset_filtrado, filtros),
-        beneficiarios_filtros=filtros_beneficiarios,
-        beneficiarios_exploracao=beneficiarios_exploracao,
-        beneficiarios_exploracao_urls=beneficiarios_exploracao_urls,
-        bi_url=bi_url,
-        export_url=export_url,
+        **BIContextService.build_beneficiaries_context(
+            filtros=filtros,
+            filtros_beneficiarios=filtros_beneficiarios,
+            visao_bi=visao_bi,
+            dataset_loader=_carregar_dataset_bi_filtrado,
+            calculators=_calculadoras_contexto_bi_beneficiarios(),
+            url_builders=_url_builders_contexto_bi_beneficiarios(),
+            constants={
+                "origem_opcoes": ORIGENS_BI,
+                "pagamento_opcoes": PAGAMENTO_BI,
+                "grupo_cota_opcoes": GRUPOS_COTA_OPCOES,
+                "fiscal_opcoes": BENEFICIARIOS_BI_FISCAL,
+                "beneficiarios_por_pagina": BENEFICIARIOS_BI_POR_PAGINA,
+            },
+        ),
     )
 
 
@@ -3166,65 +2550,16 @@ def bi_beneficiarios():
 @login_required
 def exportar_bi_csv():
     filtros = _filtros_bi_da_requisicao()
-    dataset = _filtrar_dataset_bi(_coletar_dataset_bi(filtros), filtros)
-    buffer = StringIO()
-    writer = csv.writer(buffer, delimiter=";")
-
-    writer.writerow(
-        [
-            "Competencia cadastro",
-            "Competencia pagamento",
-            "Status pagamento",
-            "Origem",
-            "Grupo",
-            "Tipo",
-            "Fluxo IRRF",
-            "Responsavel",
-            "Beneficiario",
-            "Documento",
-            "Processo",
-            "C.I.",
-            "Data pagamento",
-            "Valor bruto",
-            "Valor pago",
-            "Valor em aberto",
-            "Valor IRRF",
-            "Valor liquido",
-            "REINF",
-        ]
+    _, dataset = _carregar_dataset_bi_filtrado(filtros, ordenar=True)
+    exportacao = BIExportService.build_operational_csv(
+        dataset,
+        decimal_formatter=_decimal_csv,
+        file_date=date.today(),
     )
-
-    for row in dataset:
-        writer.writerow(
-            [
-                row["competencia_cadastro_legivel"],
-                row["competencia_pagamento_legivel"],
-                row["pagamento_status"],
-                row["origem"],
-                row["grupo_cota_label"],
-                row["tipo"],
-                row["fluxo_irrf_label"],
-                row["responsavel"],
-                row["nome"],
-                row["documento_limpo"],
-                row["processo"],
-                row["ci"],
-                row["data_pagamento_legivel"],
-                _decimal_csv(row["valor_bruto"]),
-                _decimal_csv(row["valor_pago"]),
-                _decimal_csv(row["valor_previsto_aberto"]),
-                _decimal_csv(row["valor_irrf"]),
-                _decimal_csv(row["valor_liquido"]),
-                row["reinf_status"],
-            ]
-        )
-
-    nome_arquivo = f"bi_rpvs_{date.today().isoformat()}.csv"
-    conteudo = "\ufeff" + buffer.getvalue()
     return Response(
-        conteudo,
+        exportacao["content"],
         content_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+        headers={"Content-Disposition": f'attachment; filename="{exportacao["filename"]}"'},
     )
 
 
@@ -3232,60 +2567,20 @@ def exportar_bi_csv():
 @login_required
 def exportar_bi_conferencia_csv():
     filtros = _filtros_bi_da_requisicao()
-    dataset = _filtrar_dataset_bi(
-        _coletar_dataset_bi(filtros, visao="conferencia"),
+    _, dataset = _carregar_dataset_bi_filtrado(
         filtros,
         visao="conferencia",
+        ordenar=True,
     )
     conferencia = _conferencia_bi(dataset)
-    buffer = StringIO()
-    writer = csv.writer(buffer, delimiter=";")
-
-    writer.writerow(
-        [
-            "Competencia pagamento",
-            "Quantidade",
-            "Pessoal",
-            "Pericial",
-            "Comum",
-            "Valor bruto pago",
-            "Valor IRRF",
-            "Valor liquido",
-        ]
+    exportacao = BIExportService.build_conference_csv(
+        conferencia,
+        decimal_formatter=_decimal_csv,
+        file_date=date.today(),
     )
-
-    for linha in conferencia["linhas"]:
-        writer.writerow(
-            [
-                linha["label"],
-                linha["quantidade"],
-                _decimal_csv(linha["valor_pessoal"]),
-                _decimal_csv(linha["valor_pericial"]),
-                _decimal_csv(linha["valor_comum"]),
-                _decimal_csv(linha["valor_bruto"]),
-                _decimal_csv(linha["valor_irrf"]),
-                _decimal_csv(linha["valor_liquido"]),
-            ]
-        )
-
-    writer.writerow(
-        [
-            "Total geral",
-            conferencia["totais"]["quantidade"],
-            _decimal_csv(conferencia["totais"]["valor_pessoal"]),
-            _decimal_csv(conferencia["totais"]["valor_pericial"]),
-            _decimal_csv(conferencia["totais"]["valor_comum"]),
-            _decimal_csv(conferencia["totais"]["valor_bruto"]),
-            _decimal_csv(conferencia["totais"]["valor_irrf"]),
-            _decimal_csv(conferencia["totais"]["valor_liquido"]),
-        ]
-    )
-
-    nome_arquivo = f"bi_conferencia_{date.today().isoformat()}.csv"
-    conteudo = "\ufeff" + buffer.getvalue()
     return Response(
-        conteudo,
+        exportacao["content"],
         content_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+        headers={"Content-Disposition": f'attachment; filename="{exportacao["filename"]}"'},
     )
 

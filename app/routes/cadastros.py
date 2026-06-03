@@ -18,6 +18,10 @@ from app.models import (
     User,
 )
 from app.services.audit_service import registrar_evento, snapshot_entidade
+from app.services.cadastros_context_service import CadastrosContextService
+from app.services.cadastros_dataset_service import CadastrosDatasetService
+from app.services.cadastros_filter_service import CadastrosFilterService
+from app.services.cotas_rpv_service import CotasRPVService
 from app.services.irrf_calculator import calcular_irrf_operacional
 from app.services.payment_reference_service import (
     PaymentReferenceValidationError,
@@ -25,7 +29,7 @@ from app.services.payment_reference_service import (
 )
 from app.services.processo_crosscheck_service import ProcessoCrosscheckService
 from app.utils.domain_profile import get_domain_profile
-from app.utils.normalizers import normalizar_documento, normalizar_numero_processo
+from app.utils.normalizers import normalizar_documento
 from app.utils.datetime_utils import utc_now_naive
 from app.utils.documentos import validar_documento_brasileiro
 from app.utils.navigation import current_internal_url, sanitize_internal_return_url
@@ -586,16 +590,12 @@ def _url_retorno_interna(padrao: str) -> str:
 @login_required
 def lista_rpvs():
     tipos_rpv, situacoes_empenho, situacoes_imposto, usuarios = carregar_opcoes()
-
-    q = request.args.get("q", "").strip()
-    filtro_ne = request.args.get("ne", "").strip()
-    filtro_exercicio = request.args.get("exercicio", "").strip()
-    filtro_responsavel = request.args.get("responsavel", "meus").strip() or "meus"
-    filtro_empenho = request.args.get("situacao_empenho_id", "").strip()
-    filtro_imposto = request.args.get("situacao_imposto_id", "").strip()
-    mostrar_encerrados = should_include_closed_in_queue(
-        request.args.get("mostrar_encerrados"),
-        filtro_empenho or filtro_imposto,
+    filtros = CadastrosFilterService.normalize_rpvs_filters(
+        request.args,
+        closed_queue_normalizer=should_include_closed_in_queue,
+        sort_direction_normalizer=sanitize_sort_direction,
+        page_normalizer=parse_page,
+        page_size_normalizer=parse_page_size,
     )
     situacoes_rpv_ocultas = collect_hidden_queue_status_ids(situacoes_empenho)
     situacoes_rpv_canceladas = {
@@ -608,142 +608,17 @@ def lista_rpvs():
         for situacao in situacoes_imposto
         if situacao_imposto_oculta_na_fila(situacao)
     }
-    ordenar = request.args.get("ordenar", "competencia").strip()
-    direcao = sanitize_sort_direction(request.args.get("direcao"), padrao="desc")
-    pagina = parse_page(request.args.get("pagina"), padrao=1)
-    por_pagina = parse_page_size(request.args.get("por_pagina"), padrao=20)
-
-    query = (
-        RegistroRPV.query.options(
-            joinedload(RegistroRPV.processo),
-            joinedload(RegistroRPV.situacao_empenho),
-            joinedload(RegistroRPV.situacao_imposto),
-            joinedload(RegistroRPV.elaborador),
-            joinedload(RegistroRPV.criado_por),
-        )
-        .join(Processo)
-    )
-
-    if q:
-        q_doc = normalizar_documento(q)
-        q_processo = normalizar_numero_processo(q)
-        filtros = [
-            RegistroRPV.nome_beneficiario.ilike(f"%{q}%"),
-            Processo.numero_processo.ilike(f"%{q}%"),
-            Processo.processo_edoc.ilike(f"%{q}%"),
-            RegistroRPV.historico_auto.ilike(f"%{q}%"),
-            RegistroRPV.nota_empenho.ilike(f"%{q}%"),
-            RegistroRPV.numero_se.ilike(f"%{q}%"),
-            RegistroRPV.ordem_bancaria.ilike(f"%{q}%"),
-            RegistroRPV.ob_imposto.ilike(f"%{q}%"),
-        ]
-        if q_processo and q_processo != q:
-            filtros.append(Processo.numero_processo.ilike(f"%{q_processo}%"))
-        if q_doc:
-            filtros.append(RegistroRPV.documento_normalizado.ilike(f"%{q_doc}%"))
-        query = query.filter(or_(*filtros))
-
-    if filtro_ne:
-        query = query.filter(RegistroRPV.nota_empenho.ilike(f"%{filtro_ne}%"))
-
-    if filtro_exercicio:
-        query = query.filter(Processo.exercicio == filtro_exercicio)
-
-    if filtro_responsavel == "meus":
-        query = query.filter(RegistroRPV.elaborador_id == current_user.id)
-    elif filtro_responsavel not in ("", "todos"):
-        query = query.filter(RegistroRPV.elaborador_id == int(filtro_responsavel))
-
-    if filtro_empenho:
-        query = query.filter(RegistroRPV.situacao_empenho_id == int(filtro_empenho))
-    elif not mostrar_encerrados and situacoes_rpv_ocultas:
-        filtros_fila = [~RegistroRPV.situacao_empenho_id.in_(situacoes_rpv_ocultas)]
-
-        if situacoes_imposto_ocultas:
-            fiscal_pendente = [
-                ~RegistroRPV.situacao_imposto_id.in_(situacoes_imposto_ocultas),
-                RegistroRPV.sem_irrf.is_(False),
-            ]
-            if situacoes_rpv_canceladas:
-                fiscal_pendente.append(
-                    ~RegistroRPV.situacao_empenho_id.in_(situacoes_rpv_canceladas)
-                )
-            filtros_fila.append(and_(*fiscal_pendente))
-
-        query = query.filter(or_(*filtros_fila))
-
-    if filtro_imposto:
-        query = query.filter(RegistroRPV.situacao_imposto_id == int(filtro_imposto))
-
-    ordenar_mapa = {
-        "competencia": Processo.exercicio,
-        "processo": Processo.numero_processo,
-        "resumo": RegistroRPV.resumo_operacional,
-        "valor": RegistroRPV.valor_bruto,
-        "imposto": RegistroRPV.valor_irrf,
-    }
-    coluna_ordenacao = ordenar_mapa.get(ordenar, Processo.exercicio)
-    clausula_ordenacao = (
-        coluna_ordenacao.asc() if direcao == "asc" else coluna_ordenacao.desc()
-    )
-
-    total_registros = query.count()
-    paginacao = build_pagination(total_registros, pagina, por_pagina)
-    registros = (
-        query.order_by(clausula_ordenacao, RegistroRPV.criado_em.desc())
-        .offset((paginacao["pagina"] - 1) * paginacao["por_pagina"])
-        .limit(paginacao["por_pagina"])
-        .all()
-    )
-
-    filtros_dict = request.args.to_dict()
-    filtros_ocultos = merge_query_params(
-        filtros_dict,
-        pagina=None,
-        por_pagina=None,
-    )
-    sort_urls = {
-        chave: url_for(
-            "cadastros.lista_rpvs",
-            **merge_query_params(
-                filtros_dict,
-                ordenar=chave,
-                direcao=resolve_next_sort_direction(ordenar, direcao, chave),
-                pagina=1,
-            ),
-        )
-        for chave in ordenar_mapa
-    }
-    paginas_visiveis = build_page_window(
-        paginacao["total_paginas"],
-        paginacao["pagina"],
-    )
-    pagina_urls = {
-        numero: url_for(
-            "cadastros.lista_rpvs",
-            **merge_query_params(filtros_dict, pagina=numero),
-        )
-        for numero in paginas_visiveis
-    }
-    pagina_anterior_url = (
-        url_for(
-            "cadastros.lista_rpvs",
-            **merge_query_params(filtros_dict, pagina=paginacao["pagina_anterior"]),
-        )
-        if paginacao["tem_anterior"]
-        else None
-    )
-    proxima_pagina_url = (
-        url_for(
-            "cadastros.lista_rpvs",
-            **merge_query_params(filtros_dict, pagina=paginacao["proxima_pagina"]),
-        )
-        if paginacao["tem_proxima"]
-        else None
+    payload = CadastrosDatasetService.collect_rpvs_queue_page(
+        filtros=filtros,
+        current_user_id=current_user.id,
+        hidden_status_ids=situacoes_rpv_ocultas,
+        cancelled_status_ids=situacoes_rpv_canceladas,
+        hidden_imposto_status_ids=situacoes_imposto_ocultas,
+        pagination_builder=build_pagination,
     )
     url_retorno_atual = current_internal_url(url_for("cadastros.lista_rpvs"))
     busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(
-        q or filtro_ne,
+        str(filtros.get("q", "") or "") or str(filtros.get("ne", "") or ""),
         retorno_url=url_retorno_atual,
     )
     total_pendencias_documentais = (
@@ -755,29 +630,27 @@ def lista_rpvs():
             ),
         ).count()
     )
-    return render_template(
-        "cadastros/lista_rpvs.html",
-        registros=registros,
+    contexto = CadastrosContextService.build_rpvs_list_context(
+        filtros_request=request.args,
+        filtros=filtros,
+        registros=payload["registros"],
         tipos_rpv=tipos_rpv,
         situacoes_empenho=situacoes_empenho,
         situacoes_imposto=situacoes_imposto,
         usuarios=usuarios,
-        filtros=request.args,
-        filtro_responsavel=filtro_responsavel,
-        filtros_ocultos=filtros_ocultos,
-        ordenar_atual=ordenar,
-        direcao_atual=direcao,
-        por_pagina=por_pagina,
-        paginacao=paginacao,
-        paginas_visiveis=paginas_visiveis,
-        pagina_urls=pagina_urls,
-        pagina_anterior_url=pagina_anterior_url,
-        proxima_pagina_url=proxima_pagina_url,
-        sort_urls=sort_urls,
+        paginacao=payload["paginacao"],
+        sort_fields=list(payload["ordenar_mapa"].keys()),
         busca_processo_contexto=busca_processo_contexto,
-        mostrar_encerrados=mostrar_encerrados,
+        mostrar_encerrados=bool(filtros["mostrar_encerrados"]),
         total_pendencias_documentais=total_pendencias_documentais,
         url_retorno_atual=url_retorno_atual,
+        query_params_merger=merge_query_params,
+        page_window_builder=build_page_window,
+        sort_direction_resolver=resolve_next_sort_direction,
+    )
+    return render_template(
+        "cadastros/lista_rpvs.html",
+        **contexto,
     )
 
 
@@ -1076,6 +949,7 @@ def atualizacao_rapida_rpv(registro_id):
             acao="Atualização rápida",
             antes=antes,
         )
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=current_user.id)
 
         db.session.commit()
         flash("Atualização rápida salva com sucesso.", "success")
@@ -1162,6 +1036,7 @@ def atualizacao_lote_rpvs():
                 antes=antes,
                 resumo="Ação aplicada em lote",
             )
+            CotasRPVService.sincronizar_entidade(registro, usuario_id=current_user.id)
 
         db.session.commit()
         flash(f"Lote de RPVs atualizado com sucesso ({len(registros)} registro(s)).", "success")
@@ -1511,6 +1386,7 @@ def novo_rpv():
                     ),
                     forcar_registro=True,
                 )
+            CotasRPVService.sincronizar_entidade(registro, usuario_id=current_user.id)
             db.session.commit()
 
             flash("RPV cadastrada com sucesso.", "success")
@@ -1730,6 +1606,7 @@ def editar_rpv(registro_id):
                 acao="Alteração manual",
                 antes=antes,
             )
+            CotasRPVService.sincronizar_entidade(registro, usuario_id=current_user.id)
 
             db.session.commit()
             flash("RPV atualizada com sucesso.", "success")

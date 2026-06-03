@@ -37,6 +37,7 @@ class DativoCI(db.Model):
     # Número da C.I. / e-Doc
     processo_edoc = db.Column(db.String(50), nullable=False, unique=True, index=True)
     data_ci = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="aberta", index=True)
 
     descricao = db.Column(db.String(120), nullable=False, default="Dativo Geral")
 
@@ -105,6 +106,36 @@ class DativoCI(db.Model):
     @property
     def possui_lote_sem_irrf(self) -> bool:
         return any(lote.tipo_lote == "sem_irrf" for lote in self.lotes)
+
+    @property
+    def possui_movimentacao_ativa(self) -> bool:
+        lotes_ativos = any(getattr(lote, "ativo", True) for lote in self.lotes)
+        itens_ativos = any(getattr(item, "ativo", True) for item in self.itens)
+        return lotes_ativos or itens_ativos
+
+    @property
+    def pode_editar_cabecalho(self) -> bool:
+        return not self.possui_movimentacao_ativa
+
+    @property
+    def pode_descartar(self) -> bool:
+        return self.pode_editar_cabecalho and self.status_normalizado == "aberta"
+
+    @property
+    def pode_reabrir(self) -> bool:
+        return self.pode_editar_cabecalho and self.status_normalizado == "descartada"
+
+    @property
+    def status_normalizado(self) -> str:
+        return str(self.status or "aberta").strip().casefold()
+
+    @property
+    def status_legivel(self) -> str:
+        mapa = {
+            "aberta": "Em preparacao",
+            "descartada": "Cancelada",
+        }
+        return mapa.get(self.status_normalizado, self.status or "-")
 
     def __repr__(self) -> str:
         return f"<DativoCI {self.processo_edoc}>"

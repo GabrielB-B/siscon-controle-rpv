@@ -51,6 +51,13 @@ def _print_auditoria(payload: dict) -> None:
     print(f"Status geral: {payload['status'].upper()}")
     print(f"Banco atual: {payload['database_path'] or 'N/A'}")
     print(f"Banco existe: {'SIM' if payload['database_exists'] else 'NAO'}")
+    shadow_db = payload.get("shadow_database") or {}
+    if shadow_db:
+        print(
+            "Banco sombra na raiz: "
+            + ("SIM" if shadow_db.get("shadow_database_present") else "NAO")
+        )
+        print(f"Arquivo raiz monitorado: {shadow_db.get('root_database_path') or 'N/A'}")
     print(f"Pasta de backups: {payload['backup_dir']}")
     print(f"Pasta de backups existe: {'SIM' if payload['backup_dir_exists'] else 'NAO'}")
     print()
@@ -64,6 +71,7 @@ def _print_auditoria(payload: dict) -> None:
     print(f"- Linhas do dataset do BI: {resumo['linhas_dataset_bi']}")
     print(f"- Origens do BI: {resumo['origens_bi']}")
     print(f"- Achados por severidade: {resumo['issues_por_severidade']}")
+    print(f"- Banco sombra presente: {'SIM' if resumo.get('shadow_database_present') else 'NAO'}")
     print()
 
     totais = payload["financial_totals"]
@@ -132,4 +140,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -24,7 +24,7 @@
         </div>
         <div class="page-actions">
             <a class="btn btn-ghost" href="{{ url_for('dashboard.index') }}">Voltar para a home</a>
-            {% for chave, label in visao_opcoes.items() %}
+            {% for chave, label in visao_navegacao.items() %}
                 <a class="btn {% if visao_bi == chave %}btn-secondary{% else %}btn-ghost{% endif %}" href="{{ visao_urls[chave] }}">
                     {{ label }}
                 </a>
@@ -215,7 +215,7 @@
                 </div>
                 <div class="bi-summary-pill">
                     <strong>Leitura ativa</strong>
-                    <span>{{ visao_opcoes.get(visao_bi, 'Operacional') }}</span>
+                    <span>{{ visao_labels.get(visao_bi, 'Operacional') }}</span>
                 </div>
                 {% if visao_bi == 'conferencia' %}
                     <div class="bi-summary-pill">
@@ -1076,89 +1076,6 @@
         </details>
     </section>
 
-    <section class="card">
-        <details class="filters-toggle bi-data-toggle">
-            <summary>
-                <span>Base analitica do recorte</span>
-                <span class="arrow">&#9662;</span>
-            </summary>
-
-            <div class="filters-body">
-                <div class="section-heading">
-                    <div>
-                        <p class="section-kicker">Detalhamento</p>
-                        <h2>Base analitica do recorte</h2>
-                    </div>
-                    <div class="muted">
-                        Exibindo {{ linhas|length }} de {{ total_linhas }} linha(s). Use o CSV para levar tudo.
-                    </div>
-                </div>
-
-                {% if linhas %}
-                    <div class="table-wrap">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Comp. cadastro</th>
-                                    <th>Comp. pagamento</th>
-                                    <th>Status</th>
-                                    <th>Origem</th>
-                                    <th>Grupo</th>
-                                    <th>Tipo</th>
-                                    <th>Fluxo IRRF</th>
-                                    <th>Responsavel</th>
-                                    <th>Beneficiario</th>
-                                    <th>Documento</th>
-                                    <th>Processo</th>
-                                    <th>C.I.</th>
-                                    <th>Data pgto</th>
-                                    <th>Bruto</th>
-                                    <th>Pago</th>
-                                    <th>Em aberto</th>
-                                    <th>IRRF</th>
-                                    <th>Liquido</th>
-                                    <th>REINF</th>
-                                    <th>Abrir</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for linha in linhas %}
-                                    <tr>
-                                        <td>{{ linha.competencia_cadastro_legivel }}</td>
-                                        <td>{{ linha.competencia_pagamento_legivel }}</td>
-                                        <td>{{ linha.pagamento_status }}</td>
-                                        <td>{{ linha.origem }}</td>
-                                        <td>{{ linha.grupo_cota_label }}</td>
-                                        <td>{{ linha.tipo }}</td>
-                                        <td>{{ linha.fluxo_irrf_label }}</td>
-                                        <td>{{ linha.responsavel }}</td>
-                                        <td>{{ linha.nome }}</td>
-                                        <td>{{ linha.documento_limpo }}</td>
-                                        <td>{{ linha.processo }}</td>
-                                        <td>{{ linha.ci }}</td>
-                                        <td>{{ linha.data_pagamento_legivel }}</td>
-                                        <td>{{ values.render_value(linha.valor_bruto, 'moeda', 'compact') }}</td>
-                                        <td>{{ values.render_value(linha.valor_pago, 'moeda', 'compact') }}</td>
-                                        <td>{{ values.render_value(linha.valor_previsto_aberto, 'moeda', 'compact') }}</td>
-                                        <td>{{ values.render_value(linha.valor_irrf, 'moeda', 'compact') }}</td>
-                                        <td>{{ values.render_value(linha.valor_liquido, 'moeda', 'compact') }}</td>
-                                        <td>{{ linha.reinf_status }}</td>
-                                        <td>
-                                            <a class="btn btn-ghost btn-sm" href="{{ linha.url }}">Abrir</a>
-                                        </td>
-                                    </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                {% else %}
-                    <div class="empty-state">
-                        Nenhum registro encontrou esse conjunto de filtros.
-                    </div>
-                {% endif %}
-            </div>
-        </details>
-    </section>
     {% endif %}
 </div>
 {% endblock %}

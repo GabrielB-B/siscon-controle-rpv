@@ -41,6 +41,13 @@
                             <span class="menu-text">BI</span>
                         </a>
                         <a
+                            href="{{ url_for('cotas.index') }}"
+                            class="menu-link {% if endpoint.startswith('cotas.') %}is-active{% endif %}"
+                        >
+                            <span class="menu-icon">{{ ui.icon('banknote') }}</span>
+                            <span class="menu-text">Cotas</span>
+                        </a>
+                        <a
                             href="{{ url_for('cadastros.lista_rpvs') }}"
                             class="menu-link {% if endpoint.startswith('cadastros.') %}is-active{% endif %}"
                         >

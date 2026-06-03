@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}RPVs dativos - Dativos sem continuidade{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Fila direta para retomar, corrigir ou encerrar C.I.s sem continuidade{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Dativos sem continuidade</h1>
+        <p class="muted">
+            Lista direta das C.I.s que ficaram sem seguir o fluxo. Abra a C.I. para continuar o trabalho e, se precisar, ajuste ou cancele por dentro dela.
+        </p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('dativos.lista_cis') }}">Voltar para RPVs dativos</a>
+        <a class="btn" href="{{ url_for('dativos.novo_ci') }}">Nova C.I.</a>
+    </div>
+</div>
+
+{% set total_sem_continuidade = (cis_em_preparacao|length) + (cis_criadas_fora_da_fila|length) + (cis_canceladas_sem_movimento|length) %}
+
+<div class="list-card">
+    {% if total_sem_continuidade %}
+    <div class="stack-list">
+        {% for dativo_ci in cis_em_preparacao %}
+            <a class="stack-item" href="{{ url_for('dativos.detalhe_ci', ci_id=dativo_ci.id, retorno=url_for('dativos.cabecalhos_em_revisao')) }}">
+                <div>
+                    <h3>{{ dativo_ci.processo_edoc }}</h3>
+                    <div class="stack-meta">Em preparacao | {{ dativo_ci.exercicio_formatado }} | Responsavel: {{ dativo_ci.responsavel.nome if dativo_ci.responsavel else '-' }}</div>
+                    <span class="alert-badge">Abrir C.I.</span>
+                </div>
+                <div class="stack-kpi">
+                    <span class="stack-value">Continuar</span>
+                    <span class="stack-count">Fluxo ainda nao iniciado</span>
+                </div>
+            </a>
+        {% endfor %}
+
+        {% for dativo_ci in cis_criadas_fora_da_fila %}
+            <a class="stack-item" href="{{ url_for('dativos.detalhe_ci', ci_id=dativo_ci.id, retorno=url_for('dativos.cabecalhos_em_revisao')) }}">
+                <div>
+                    <h3>{{ dativo_ci.processo_edoc }}</h3>
+                    <div class="stack-meta">Fora da sua fila | {{ dativo_ci.exercicio_formatado }} | Responsavel atual: {{ dativo_ci.responsavel.nome if dativo_ci.responsavel else '-' }}</div>
+                    <span class="alert-badge">Abrir C.I.</span>
+                </div>
+                <div class="stack-kpi">
+                    <span class="stack-value">Revisar</span>
+                    <span class="stack-count">Corrigir ou continuar</span>
+                </div>
+            </a>
+        {% endfor %}
+
+        {% for dativo_ci in cis_canceladas_sem_movimento %}
+            <a class="stack-item" href="{{ url_for('dativos.detalhe_ci', ci_id=dativo_ci.id, retorno=url_for('dativos.cabecalhos_em_revisao')) }}">
+                <div>
+                    <h3>{{ dativo_ci.processo_edoc }}</h3>
+                    <div class="stack-meta">Cancelada sem movimento | {{ dativo_ci.exercicio_formatado }} | Responsavel: {{ dativo_ci.responsavel.nome if dativo_ci.responsavel else '-' }}</div>
+                    <span class="alert-badge">Abrir C.I.</span>
+                </div>
+                <div class="stack-kpi">
+                    <span class="stack-value">Revisar</span>
+                    <span class="stack-count">Reabrir ou manter cancelada</span>
+                </div>
+            </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        Nenhum dativo sem continuidade apareceu para voce neste momento.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

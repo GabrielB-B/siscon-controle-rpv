@@ -11,6 +11,9 @@ class DativosService:
     Servico responsavel pelas regras de negocio do modulo de dativos.
     """
 
+    STATUS_CI_ABERTA = "aberta"
+    STATUS_CI_DESCARTADA = "descartada"
+
     @staticmethod
     def obter_situacao_rpv_inicial() -> SituacaoEmpenho:
         nome = get_domain_profile().situacao_empenho_inicial_nome
@@ -52,6 +55,7 @@ class DativosService:
             exercicio=exercicio,
             processo_edoc=processo_edoc,
             data_ci=data_ci,
+            status=DativosService.STATUS_CI_ABERTA,
             descricao=descricao,
             criado_por_id=usuario_id,
             responsavel_id=responsavel_id or usuario_id,
@@ -60,6 +64,74 @@ class DativosService:
         db.session.add(dativo_ci)
         db.session.flush()
 
+        return dativo_ci
+
+    @staticmethod
+    def validar_ci_sem_movimentacao(dativo_ci: DativoCI) -> None:
+        if dativo_ci.possui_movimentacao_ativa:
+            raise ValueError(
+                "Esta C.I. ja possui lote ou itens cadastrados. "
+                "O cabecalho nao pode ser corrigido ou cancelado depois da movimentacao."
+            )
+
+    @staticmethod
+    def atualizar_ci_dativo(
+        dativo_ci: DativoCI,
+        *,
+        exercicio: str,
+        processo_edoc: str,
+        data_ci,
+        responsavel_id: int,
+        usuario_id: int,
+        descricao: str | None = None,
+    ) -> DativoCI:
+        DativosService.validar_ci_sem_movimentacao(dativo_ci)
+
+        processo_edoc_limpo = str(processo_edoc or "").strip()
+        existente = (
+            DativoCI.query.filter(
+                DativoCI.processo_edoc == processo_edoc_limpo,
+                DativoCI.id != dativo_ci.id,
+            )
+            .order_by(DativoCI.id.asc())
+            .first()
+        )
+        if existente:
+            raise ValueError(
+                "Ja existe outra C.I. de dativo cadastrada com esse numero. "
+                "Abra a C.I. existente para revisar, corrigir ou reabrir o cabecalho certo."
+            )
+
+        dativo_ci.exercicio = exercicio
+        dativo_ci.processo_edoc = processo_edoc_limpo
+        dativo_ci.data_ci = data_ci
+        dativo_ci.responsavel_id = responsavel_id
+        if descricao is not None:
+            dativo_ci.descricao = str(descricao).strip() or "Dativo Geral"
+        dativo_ci.atualizado_por_id = usuario_id
+        db.session.flush()
+        return dativo_ci
+
+    @staticmethod
+    def descartar_ci_dativo(dativo_ci: DativoCI, *, usuario_id: int) -> DativoCI:
+        DativosService.validar_ci_sem_movimentacao(dativo_ci)
+        if dativo_ci.status_normalizado == DativosService.STATUS_CI_DESCARTADA:
+            raise ValueError("Esta C.I. ja esta cancelada.")
+
+        dativo_ci.status = DativosService.STATUS_CI_DESCARTADA
+        dativo_ci.atualizado_por_id = usuario_id
+        db.session.flush()
+        return dativo_ci
+
+    @staticmethod
+    def reabrir_ci_dativo(dativo_ci: DativoCI, *, usuario_id: int) -> DativoCI:
+        DativosService.validar_ci_sem_movimentacao(dativo_ci)
+        if dativo_ci.status_normalizado == DativosService.STATUS_CI_ABERTA:
+            raise ValueError("Esta C.I. ja esta aberta.")
+
+        dativo_ci.status = DativosService.STATUS_CI_ABERTA
+        dativo_ci.atualizado_por_id = usuario_id
+        db.session.flush()
         return dativo_ci
 
     @staticmethod

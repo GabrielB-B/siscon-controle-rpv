@@ -1,17 +1,18 @@
-import csv
 from datetime import date, datetime
 from decimal import Decimal
-from io import StringIO
 
 from flask import Blueprint, Response, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
-from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 from unidecode import unidecode
 
 from app.extensions import db
-from app.models import DativoCI, DativoItem, HistoricoAlteracao, Processo, RegistroRPV, User
+from app.models import DativoCI, DativoItem, HistoricoAlteracao, RegistroRPV, User
 from app.services.audit_service import registrar_evento, snapshot_entidade
+from app.services.reinf_context_service import ReinfContextService
+from app.services.reinf_dataset_service import ReinfDatasetService
+from app.services.reinf_export_service import ReinfExportService
+from app.services.reinf_filter_service import ReinfFilterService
 from app.utils.formatters import formatar_documento_br
 from app.utils.navigation import current_internal_url, sanitize_internal_return_url
 from app.utils.normalizers import normalizar_documento
@@ -492,48 +493,14 @@ def _query_rpvs_reinf(
     filtro_busca: str,
     ano: str | None,
 ):
-    busca_bruta = str(filtro_busca or "").strip()
-    busca = _normalizar_texto(filtro_busca)
-    busca_doc = normalizar_documento(filtro_busca)
-
-    query = (
-        RegistroRPV.query.options(
-            joinedload(RegistroRPV.elaborador),
-            joinedload(RegistroRPV.processo),
-            joinedload(RegistroRPV.situacao_imposto),
-            joinedload(RegistroRPV.situacao_empenho),
-        )
-        .filter(RegistroRPV.ativo.is_(True), RegistroRPV.sem_irrf.is_(False))
-        .order_by(RegistroRPV.criado_em.desc())
-    )
-
-    if filtro_responsavel not in ("", "todos", "meus"):
-        query = query.filter(RegistroRPV.elaborador_id == filtro_responsavel)
-
-    query = _aplicar_filtro_data_pagamento(
-        query,
-        RegistroRPV.data_pagamento,
+    return ReinfDatasetService.build_rpvs_query(
         competencia=competencia,
+        filtro_responsavel=filtro_responsavel,
+        filtro_busca=filtro_busca,
         ano=ano,
+        text_normalizer=_normalizar_texto,
+        payment_filter_applier=_aplicar_filtro_data_pagamento,
     )
-
-    if busca or busca_doc:
-        query = query.join(RegistroRPV.processo)
-        filtros_busca = []
-        if busca:
-            filtros_busca.extend(
-                [
-                    RegistroRPV.nome_beneficiario_normalizado.contains(busca),
-                    Processo.numero_processo.ilike(f"%{busca_bruta}%"),
-                    Processo.processo_edoc.ilike(f"%{busca_bruta}%"),
-                    RegistroRPV.historico_auto.ilike(f"%{busca_bruta}%"),
-                ]
-            )
-        if busca_doc:
-            filtros_busca.append(RegistroRPV.documento_normalizado.contains(busca_doc))
-        query = query.filter(or_(*filtros_busca))
-
-    return query
 
 
 def _query_dativos_reinf(
@@ -543,47 +510,14 @@ def _query_dativos_reinf(
     filtro_busca: str,
     ano: str | None,
 ):
-    busca_bruta = str(filtro_busca or "").strip()
-    busca = _normalizar_texto(filtro_busca)
-    busca_doc = normalizar_documento(filtro_busca)
-
-    query = (
-        DativoItem.query.options(
-            joinedload(DativoItem.dativo_ci).joinedload(DativoCI.responsavel),
-            joinedload(DativoItem.situacao_rpv),
-        )
-        .filter(DativoItem.grupo == "com_irrf", DativoItem.ativo.is_(True))
-        .order_by(DativoItem.criado_em.desc())
-    )
-
-    if filtro_responsavel not in ("", "todos", "meus"):
-        query = query.join(DativoItem.dativo_ci).filter(DativoCI.responsavel_id == filtro_responsavel)
-
-    query = _aplicar_filtro_data_pagamento(
-        query,
-        DativoItem.data_pagamento,
+    return ReinfDatasetService.build_dativos_query(
         competencia=competencia,
+        filtro_responsavel=filtro_responsavel,
+        filtro_busca=filtro_busca,
         ano=ano,
+        text_normalizer=_normalizar_texto,
+        payment_filter_applier=_aplicar_filtro_data_pagamento,
     )
-
-    if busca or busca_doc:
-        if filtro_responsavel in ("", "todos", "meus"):
-            query = query.join(DativoItem.dativo_ci)
-        filtros_busca = []
-        if busca:
-            filtros_busca.extend(
-                [
-                    DativoItem.nome_beneficiario_normalizado.contains(busca),
-                    DativoItem.numero_processo.ilike(f"%{busca_bruta}%"),
-                    DativoCI.processo_edoc.ilike(f"%{busca_bruta}%"),
-                    DativoItem.resumo_operacional.ilike(f"%{busca_bruta}%"),
-                ]
-            )
-        if busca_doc:
-            filtros_busca.append(DativoItem.cpf_normalizado.contains(busca_doc))
-        query = query.filter(or_(*filtros_busca))
-
-    return query
 
 
 def _anos_disponiveis_reinf(filtro_responsavel: str, filtro_busca: str) -> list[str]:
@@ -790,61 +724,24 @@ def _coletar_base_reinf(
     ano: str | None = None,
     retorno_url: str | None = None,
 ) -> list[dict]:
-    busca = _normalizar_texto(filtro_busca)
-    busca_doc = normalizar_documento(filtro_busca)
-    registros = []
-
-    rpvs = _query_rpvs_reinf(
+    return ReinfDatasetService.collect_base(
         competencia=competencia,
         filtro_responsavel=filtro_responsavel,
         filtro_busca=filtro_busca,
         ano=ano,
-    ).all()
-    for registro in rpvs:
-        if getattr(registro, "status_principal_cancelado", False):
-            continue
-        if not _tem_irrf_rpv(registro):
-            continue
-
-        if competencia and not _registro_pago_no_mes(registro.data_pagamento, competencia):
-            continue
-        if ano and not _registro_pago_no_ano(registro.data_pagamento, ano):
-            continue
-
-        if not _filtro_responsavel_ok(registro.elaborador_id, filtro_responsavel):
-            continue
-
-        linha = _montar_registro_rpv(registro, retorno_url=retorno_url)
-        if not _filtro_busca_ok(linha, busca, busca_doc):
-            continue
-
-        registros.append(linha)
-
-    itens_irrf = _query_dativos_reinf(
-        competencia=competencia,
-        filtro_responsavel=filtro_responsavel,
-        filtro_busca=filtro_busca,
-        ano=ano,
-    ).all()
-    for item in itens_irrf:
-        if getattr(item, "status_principal_cancelado", False):
-            continue
-        if competencia and not _registro_pago_no_mes(item.data_pagamento, competencia):
-            continue
-        if ano and not _registro_pago_no_ano(item.data_pagamento, ano):
-            continue
-
-        if not _filtro_responsavel_ok(item.dativo_ci.responsavel_id if item.dativo_ci else None, filtro_responsavel):
-            continue
-
-        linha = _montar_registro_dativo(item, retorno_url=retorno_url)
-        if not _filtro_busca_ok(linha, busca, busca_doc):
-            continue
-
-        registros.append(linha)
-
-    registros.sort(key=_chave_ordenacao_registro, reverse=True)
-    return registros
+        retorno_url=retorno_url,
+        rpv_query_builder=_query_rpvs_reinf,
+        dativo_query_builder=_query_dativos_reinf,
+        rpv_has_irrf=_tem_irrf_rpv,
+        month_filter_checker=_registro_pago_no_mes,
+        year_filter_checker=_registro_pago_no_ano,
+        responsavel_filter_checker=_filtro_responsavel_ok,
+        rpv_record_builder=_montar_registro_rpv,
+        dativo_record_builder=_montar_registro_dativo,
+        busca_filter_checker=_filtro_busca_ok,
+        sort_key_builder=_chave_ordenacao_registro,
+        text_normalizer=_normalizar_texto,
+    )
 
 
 def _chave_beneficiario_reinf(registro: dict) -> tuple[str, str]:
@@ -1097,32 +994,21 @@ def _atualizar_status_reinf(
 
 
 def _filtros_reinf():
-    visao = _visao_reinf_valida(request.args.get("visao"))
-    resolucao_competencia = (
-        _resolver_competencia_reinf(request.args.get("competencia", "").strip())
-        if visao == "operacional"
-        else _resolver_competencia_reinf_livre(request.args.get("competencia", "").strip())
+    filtros = ReinfFilterService.normalize_filters(
+        request.args,
+        visao_normalizer=_visao_reinf_valida,
+        competencia_operacional_resolver=_resolver_competencia_reinf,
+        competencia_livre_resolver=_resolver_competencia_reinf_livre,
+        competencia_mes_atual_loader=_competencia_mes_atual,
+        ano_normalizer=_ano_valido,
+        ordenacao_normalizer=_ordenacao_reinf_valida,
+        direcao_normalizer=sanitize_sort_direction,
+        pagina_normalizer=parse_page,
+        page_size_normalizer=parse_page_size,
+        status_padrao=REINF_STATUS_NAO_ENVIADO,
     )
-    ano_padrao = (
-        resolucao_competencia["competencia_aplicada"][:4]
-        if resolucao_competencia["competencia_aplicada"]
-        else _competencia_mes_atual()[:4]
-    )
-    return {
-        "visao": visao,
-        "competencia": resolucao_competencia["competencia_aplicada"],
-        "ano": _ano_valido(request.args.get("ano"), ano_padrao),
-        "responsavel": request.args.get("responsavel", "todos").strip() or "todos",
-        "reinf_status": request.args.get("reinf_status", "").strip() or REINF_STATUS_NAO_ENVIADO,
-        "q": request.args.get("q", "").strip(),
-        "ordenar": _ordenacao_reinf_valida(request.args.get("ordenar")),
-        "direcao": sanitize_sort_direction(request.args.get("direcao"), padrao=REINF_DIRECAO_PADRAO),
-        "pagina": parse_page(request.args.get("pagina"), padrao=1),
-        "por_pagina": parse_page_size(request.args.get("por_pagina"), padrao=20),
-        "competencia_padrao": resolucao_competencia["competencia_padrao"],
-        "competencias_pendentes": resolucao_competencia["competencias_pendentes"],
-        "competencia_bloqueada": resolucao_competencia["competencia_bloqueada"],
-    }
+    filtros["direcao"] = str(filtros["direcao"] or REINF_DIRECAO_PADRAO)
+    return filtros
 
 
 @reinf_bp.route("/")
@@ -1130,26 +1016,13 @@ def _filtros_reinf():
 def index():
     usuarios = User.query.filter_by(ativo=True).order_by(User.nome.asc()).all()
     filtros = _filtros_reinf()
-    visao = filtros["visao"]
+    visao = str(filtros["visao"])
     url_retorno_atual = current_internal_url(url_for("reinf.index"))
     anos_disponiveis = _anos_disponiveis_reinf(filtros["responsavel"], filtros["q"])
     if not anos_disponiveis:
         anos_disponiveis = [filtros["ano"]]
     if filtros["ano"] not in anos_disponiveis:
         filtros["ano"] = anos_disponiveis[0]
-
-    filtros_dict = request.args.to_dict()
-    view_urls = {
-        chave: url_for(
-            "reinf.index",
-            **merge_query_params(
-                filtros_dict,
-                visao=chave,
-                pagina=None,
-            ),
-        )
-        for chave in REINF_VISOES
-    }
 
     registros_paginados = []
     paginacao = {
@@ -1159,12 +1032,6 @@ def index():
         "pagina": 1,
         "total_paginas": 1,
     }
-    filtros_ocultos = {}
-    sort_urls = {}
-    paginas_visiveis = []
-    pagina_urls = {}
-    pagina_anterior_url = None
-    proxima_pagina_url = None
     export_url = None
     conferencia_mensal = {
         "linhas": [],
@@ -1186,6 +1053,7 @@ def index():
             "valor_irrf": Decimal("0.00"),
         },
     }
+    export_url = None
 
     if visao == "operacional":
         registros_base = _coletar_base_reinf(
@@ -1204,62 +1072,6 @@ def index():
             registros,
             filtros["pagina"],
             filtros["por_pagina"],
-        )
-        filtros_ocultos = merge_query_params(
-            filtros_dict,
-            pagina=None,
-            por_pagina=None,
-        )
-        sort_keys = [
-            "origem",
-            "competencia",
-            "data_pagamento",
-            "beneficiario",
-            "imposto",
-            "status_reinf",
-        ]
-        sort_urls = {
-            chave: url_for(
-                "reinf.index",
-                **merge_query_params(
-                    filtros_dict,
-                    ordenar=chave,
-                    direcao=resolve_next_sort_direction(
-                        filtros["ordenar"],
-                        filtros["direcao"],
-                        chave,
-                    ),
-                    pagina=1,
-                ),
-            )
-            for chave in sort_keys
-        }
-        paginas_visiveis = build_page_window(
-            paginacao["total_paginas"],
-            paginacao["pagina"],
-        )
-        pagina_urls = {
-            numero: url_for(
-                "reinf.index",
-                **merge_query_params(filtros_dict, pagina=numero),
-            )
-            for numero in paginas_visiveis
-        }
-        pagina_anterior_url = (
-            url_for(
-                "reinf.index",
-                **merge_query_params(filtros_dict, pagina=paginacao["pagina_anterior"]),
-            )
-            if paginacao["tem_anterior"]
-            else None
-        )
-        proxima_pagina_url = (
-            url_for(
-                "reinf.index",
-                **merge_query_params(filtros_dict, pagina=paginacao["proxima_pagina"]),
-            )
-            if paginacao["tem_proxima"]
-            else None
         )
         export_url = url_for(
             "reinf.exportar_csv",
@@ -1294,43 +1106,28 @@ def index():
             filtros["ano"],
         )
 
-    return render_template(
-        "reinf/index.html",
-        visao_reinf=visao,
-        view_urls=view_urls,
-        visao_opcoes=REINF_VISOES,
+    contexto = ReinfContextService.build_index_context(
+        filtros_request=request.args,
+        filtros=filtros,
+        usuarios=usuarios,
+        anos_disponiveis=anos_disponiveis,
         registros=registros_paginados,
+        paginacao=paginacao,
         conferencia_mensal=conferencia_mensal,
         conferencia_anual=conferencia_anual,
-        anos_disponiveis=anos_disponiveis,
-        usuarios=usuarios,
-        reinf_status_opcoes=REINF_STATUS_OPCOES,
-        reinf_status_filtros=REINF_STATUS_FILTROS,
-        reinf_ordenacao_opcoes=REINF_ORDENACAO_OPCOES,
-        reinf_direcao_opcoes=REINF_DIRECAO_OPCOES,
-        reinf_ordenacao_labels=dict(REINF_ORDENACAO_OPCOES),
         export_url=export_url,
-        filtros_ocultos=filtros_ocultos,
-        filtro_competencia=filtros["competencia"],
-        filtro_ano=filtros["ano"],
-        filtro_responsavel=filtros["responsavel"],
-        filtro_reinf_status=filtros["reinf_status"],
-        filtro_busca=filtros["q"],
-        ordenar_atual=filtros["ordenar"],
-        direcao_atual=filtros["direcao"],
-        por_pagina=filtros["por_pagina"],
-        paginacao=paginacao,
-        paginas_visiveis=paginas_visiveis,
-        pagina_urls=pagina_urls,
-        pagina_anterior_url=pagina_anterior_url,
-        proxima_pagina_url=proxima_pagina_url,
-        sort_urls=sort_urls,
-        competencia_padrao=filtros["competencia_padrao"],
-        competencia_bloqueada=filtros["competencia_bloqueada"],
-        competencias_pendentes=filtros["competencias_pendentes"],
-        competencia_legivel=_competencia_legivel,
         url_retorno_atual=url_retorno_atual,
+        view_options=REINF_VISOES,
+        status_opcoes=REINF_STATUS_OPCOES,
+        status_filtros=REINF_STATUS_FILTROS,
+        ordenacao_opcoes=REINF_ORDENACAO_OPCOES,
+        direcao_opcoes=REINF_DIRECAO_OPCOES,
+        competencia_legivel=_competencia_legivel,
+        query_params_merger=merge_query_params,
+        page_window_builder=build_page_window,
+        sort_direction_resolver=resolve_next_sort_direction,
     )
+    return render_template("reinf/index.html", **contexto)
 
 
 @reinf_bp.route("/exportar.csv")
@@ -1348,44 +1145,11 @@ def exportar_csv():
         if _filtro_status_ok(registro["reinf_status"], filtros["reinf_status"])
     ]
     registros = _ordenar_registros_reinf(registros, filtros["ordenar"], filtros["direcao"])
-
-    buffer = StringIO()
-    writer = csv.writer(buffer, delimiter=";")
-    writer.writerow(
-        [
-            "Origem",
-            "Competência",
-            "Data pagamento",
-            "Beneficiário",
-            "Documento",
-            "Processo",
-            "C.I.",
-            "Resumo operacional",
-            "Valor bruto",
-            "IRRF",
-            "Status REINF",
-        ]
-    )
-
-    for registro in registros:
-        writer.writerow(
-            [
-                registro["tipo_origem"],
-                registro["competencia"],
-                registro["data_pagamento"].strftime("%d/%m/%Y") if registro["data_pagamento"] else "-",
-                registro["beneficiario"],
-                registro["documento_limpo"],
-                registro["processo"],
-                registro["ci"],
-                registro["resumo_operacional"],
-                _decimal_csv(registro["valor"]),
-                _decimal_csv(registro["imposto"]),
-                registro["reinf_status"],
-            ]
-        )
-
     nome_arquivo = f"reinf_{filtros['competencia']}.csv"
-    conteudo = "\ufeff" + buffer.getvalue()
+    conteudo = ReinfExportService.build_csv_content(
+        registros,
+        decimal_formatter=_decimal_csv,
+    )
     return Response(
         conteudo,
         content_type="text/csv; charset=utf-8",
@@ -1601,3 +1365,4 @@ def marcar_conferencia_processo():
         flash(mensagem, "danger")
 
     return redirect(_url_retorno_interna(url_for("reinf.index")))
+

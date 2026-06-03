@@ -198,6 +198,7 @@ def snapshot_dativo_ci(dativo_ci: DativoCI) -> dict:
         "exercicio": dativo_ci.exercicio,
         "processo_edoc": dativo_ci.processo_edoc,
         "data_ci": dativo_ci.data_ci,
+        "status": getattr(dativo_ci, "status_legivel", dativo_ci.status),
         "descricao": dativo_ci.descricao,
         "responsavel": getattr(getattr(dativo_ci, "responsavel", None), "nome", None),
     }

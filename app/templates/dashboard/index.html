@@ -9,12 +9,8 @@
 <div class="dashboard-shell">
     <section class="hero-panel">
         <article class="card hero-card">
-            <p class="kicker">Painel inicial</p>
-            <h1 class="hero-title">O que pede continuidade agora</h1>
-            <p class="hero-copy">
-                Leitura direta do que esta parado no setor, com foco em RPVs normais
-                e nos pontos que pedem continuidade imediata.
-            </p>
+            <p class="kicker">Painel do setor</p>
+            <h1 class="hero-title">Resumo do setor</h1>
 
             <div class="pill-row">
                 <span class="pill">Competencia atual: {{ competencia_atual_legivel }}</span>
@@ -79,43 +75,38 @@
                 </article>
             </div>
 
-            <a class="hero-pendency-card {% if pendencias_documentais_setor.sem_pendencias %}is-clear{% endif %}" href="{{ pendencias_documentais_setor.url_setor }}">
-                <div class="hero-pendency-content">
-                    <div class="hero-pendency-head">
-                        <div>
-                            <p class="hero-preview-kicker">Documentos pendentes do setor</p>
-                            <h2 class="hero-pendency-title">{{ pendencias_documentais_setor.titulo }}</h2>
-                        </div>
-                        <span class="hero-pendency-cta">
-                            {{ "Abrir fila do setor" if not pendencias_documentais_setor.sem_pendencias else "Conferir fila" }}
-                        </span>
+            <section class="hero-cota-strip">
+                <div class="hero-cota-strip-head">
+                    <div>
+                        <p class="hero-preview-kicker">Cotas do mes</p>
+                        <h2 class="hero-preview-title">Saldo disponivel por ficha</h2>
                     </div>
-                    <p class="hero-pendency-copy">{{ pendencias_documentais_setor.nota }}</p>
-                    <div class="hero-pendency-value-row">
-                        <span class="hero-pendency-value-label">Valor fora do fluxo</span>
-                        <strong class="hero-pendency-value">R$ {{ pendencias_documentais_setor.total_valor_aberto|moeda_br }}</strong>
+                    <div class="hero-cota-strip-actions">
+                        {% if cotas_home.tem_saldo_anterior_pendente %}
+                            <span class="hero-cota-flag">Com saldo anterior pendente</span>
+                        {% endif %}
+                        <a class="hero-preview-link" href="{{ url_for('cotas.index', competencia=cotas_home.competencia) }}">Abrir cotas</a>
                     </div>
                 </div>
-
-                <div class="hero-pendency-metrics">
-                    {% for item in pendencias_documentais_setor.metricas %}
-                        <span class="hero-pendency-metric {{ item.css_class }}">
-                            <small>{{ item.label }}</small>
-                            <strong>{{ item.valor }}</strong>
-                        </span>
+                <div class="hero-cota-grid">
+                    {% for grupo in cotas_home.grupos %}
+                        <a class="hero-cota-card {{ grupo.status_class }}" href="{{ url_for('cotas.index', competencia=cotas_home.competencia) }}" title="{{ grupo.percentual_restante_label }}">
+                            <span class="hero-cota-label">{{ grupo.label }}</span>
+                            <strong class="hero-cota-value">{{ values.render_value(grupo.saldo_disponivel, 'moeda', 'inline') }}</strong>
+                            <span class="hero-cota-state">
+                                <span class="hero-cota-state-dot" aria-hidden="true"></span>
+                                {{ grupo.status_visual_label }}
+                            </span>
+                        </a>
                     {% endfor %}
                 </div>
-            </a>
+            </section>
         </article>
 
         <article class="card hero-side hero-side-card hero-side-reinf-card">
             <div>
-                <p class="section-kicker">Prestacao mensal</p>
-                <h2 class="hero-side-title">Fechamento REINF de {{ prestacao_mensal.competencia_legivel }}</h2>
-                <p class="hero-side-copy">
-                    Entram aqui somente pagamentos da competencia em fechamento com IRRF.
-                    A sinalizacao geral de acompanhamento ficou concentrada nos blocos operacionais abaixo.
-                </p>
+                <p class="section-kicker">REINF mensal</p>
+                <h2 class="hero-side-title">REINF de {{ prestacao_mensal.competencia_legivel }}</h2>
             </div>
 
             <div class="hero-stat-grid">
@@ -142,9 +133,39 @@
             </div>
 
             <div class="hero-side-actions">
-                <a class="btn btn-secondary" href="{{ prestacao_mensal.url }}">Abrir REINF da competencia</a>
+                <a class="btn btn-secondary" href="{{ prestacao_mensal.url }}">Abrir REINF</a>
             </div>
         </article>
+    </section>
+
+    <section class="card hero-pendency-shell">
+        <a class="hero-pendency-card {% if pendencias_documentais_setor.sem_pendencias %}is-clear{% endif %}" href="{{ pendencias_documentais_setor.url_setor }}">
+            <div class="hero-pendency-content">
+                <div class="hero-pendency-head">
+                    <div>
+                        <p class="hero-preview-kicker">Documentos pendentes do setor</p>
+                        <h2 class="hero-pendency-title">{{ pendencias_documentais_setor.titulo }}</h2>
+                    </div>
+                    <span class="hero-pendency-cta">
+                        {{ "Abrir fila do setor" if not pendencias_documentais_setor.sem_pendencias else "Conferir fila" }}
+                    </span>
+                </div>
+                <p class="hero-pendency-copy">{{ pendencias_documentais_setor.nota }}</p>
+                <div class="hero-pendency-value-row">
+                    <span class="hero-pendency-value-label">Valor fora do fluxo</span>
+                    <strong class="hero-pendency-value">R$ {{ pendencias_documentais_setor.total_valor_aberto|moeda_br }}</strong>
+                </div>
+            </div>
+
+            <div class="hero-pendency-metrics">
+                {% for item in pendencias_documentais_setor.metricas %}
+                    <span class="hero-pendency-metric {{ item.css_class }}">
+                        <small>{{ item.label }}</small>
+                        <strong>{{ item.valor }}</strong>
+                    </span>
+                {% endfor %}
+            </div>
+        </a>
     </section>
 
     <section class="card sector-priority-card">
@@ -265,7 +286,9 @@
                         {% else %}
                             <div class="stack-kpi">
                                 <span class="stack-value">{{ values.render_value(item.quantidade, 'numero', 'inline') }}</span>
-                                <span class="stack-count">{{ values.render_value(item.valor_total, 'moeda', 'compact') }}</span>
+                                <span class="stack-count">
+                                    {{ item.kpi_secundaria if item.kpi_secundaria is defined else values.render_value(item.valor_total, 'moeda', 'compact') }}
+                                </span>
                             </div>
                         {% endif %}
                     </a>

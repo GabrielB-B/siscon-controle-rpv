@@ -16,10 +16,12 @@
 </div>
 
 <div class="section-card content-card-narrow">
-    <form method="POST">
+    <form method="POST" id="novo-ci-form">
         {{ csrf_input() }}
+        <input type="hidden" name="confirmar_ci_existente" id="confirmar_ci_existente" value="{{ form_data.get('confirmar_ci_existente', '0') }}">
+
         <div class="form-group">
-            <label for="exercicio">Exercício (mês/ano)</label>
+            <label for="exercicio">Exercicio (mes/ano)</label>
             <input type="month" id="exercicio" name="exercicio" value="{{ form_data.get('exercicio', '') }}" required>
         </div>
 
@@ -34,7 +36,7 @@
         </div>
 
         <div class="form-group">
-            <label for="responsavel_id">Responsável operacional</label>
+            <label for="responsavel_id">Responsavel operacional</label>
             <select id="responsavel_id" name="responsavel_id" required>
                 {% set responsavel_selecionado = form_data.get('responsavel_id', current_user.id|string) %}
                 {% for usuario in usuarios %}
@@ -48,4 +50,25 @@
         <button type="submit">Criar C.I. de dativo</button>
     </form>
 </div>
+
+{% set processo_crosscheck_scope = 'dativos' %}
+{% set processo_crosscheck_grade_vazia = true %}
+{% include "components/processo_crosscheck_card.html" %}
+
+{% if busca_processo_contexto %}
+<div class="section-card warning-panel content-card-narrow">
+    <h2 class="section-card-title">Confirmacao obrigatoria</h2>
+    <p class="muted">
+        O numero informado ja aparece em outro modulo ou contexto do sistema.
+        Se este cabecalho realmente precisar nascer em dativos, confirme manualmente.
+    </p>
+    <button
+        type="button"
+        class="btn"
+        onclick="document.getElementById('confirmar_ci_existente').value='1'; document.getElementById('novo-ci-form').submit();"
+    >
+        Confirmar C.I./eDOC compartilhada e continuar
+    </button>
+</div>
+{% endif %}
 {% endblock %}

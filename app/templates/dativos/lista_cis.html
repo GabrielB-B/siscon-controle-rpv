@@ -146,34 +146,6 @@
 {% set processo_crosscheck_grade_vazia = not linhas %}
 {% include "components/processo_crosscheck_card.html" %}
 
-{% if cis_incompletas %}
-<div class="section-card warning-panel">
-    <div class="inline-cluster-between">
-        <div>
-            <h2 class="section-card-title">C.I.s aguardando planilha</h2>
-            <p class="muted">
-                Estas C.I.s ja foram criadas, mas ainda nao possuem lote nem beneficiarios cadastrados.
-            </p>
-        </div>
-        <span class="summary-meta-pill">
-            {{ total_ci_incompletas }} pendente{% if total_ci_incompletas != 1 %}s{% endif %}
-        </span>
-    </div>
-
-    <div class="inline-cluster-sm content-top-14">
-        {% for ci_incompleta in cis_incompletas %}
-            <a class="btn btn-secondary btn-sm" href="{{ url_for('dativos.detalhe_ci', ci_id=ci_incompleta.id, retorno=url_retorno_atual) }}">
-                Abrir C.I. {{ ci_incompleta.processo_edoc }}
-            </a>
-        {% endfor %}
-    </div>
-
-    <p class="muted content-top-14">
-        Abra a C.I. para importar as planilhas ou completar manualmente o que ficou faltando.
-    </p>
-</div>
-{% endif %}
-
 <div class="list-card">
     <div class="workbench-toolbar">
         <div class="workbench-summary">
@@ -191,9 +163,6 @@
                 {% endif %}
             </div>
             <div><strong>C.I.s na consulta:</strong> {{ total_ci }}</div>
-            {% if total_ci_incompletas %}
-                <div><strong>Pendentes de planilha:</strong> {{ total_ci_incompletas }}</div>
-            {% endif %}
             <div><strong>Lotes sem IRRF:</strong> {{ total_lotes }}</div>
             <div><strong>Itens com IRRF:</strong> {{ total_itens_com_irrf }}</div>
             <div><strong>Visão:</strong> {% if mostrar_encerrados %}Todos os status{% else %}Fila ativa{% endif %}</div>

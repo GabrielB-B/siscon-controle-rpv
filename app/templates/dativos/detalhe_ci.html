@@ -14,6 +14,9 @@
     </div>
     <div class="page-actions">
         <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='dativo_ci', entidade_id=dativo_ci.id) }}">Histórico</a>
+        {% if dativo_ci.pode_editar_cabecalho %}
+        <a class="btn btn-secondary" href="{{ url_for('dativos.gerenciar_cabecalho_ci', ci_id=dativo_ci.id, retorno=url_retorno) }}">Editar dados da C.I.</a>
+        {% endif %}
         <a class="btn btn-secondary" href="{{ url_retorno }}">Voltar para C.I.s</a>
         <a class="btn" href="{{ url_for('dativos.lotes_sem_irrf') }}">Ver lotes</a>
         <a class="btn btn-secondary" href="{{ url_for('dativos.itens_com_irrf') }}">Ver itens com IRRF</a>

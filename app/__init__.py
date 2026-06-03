@@ -36,6 +36,9 @@ def create_app():
         DativoItem,
         HistoricoAlteracao,
         PasswordResetToken,
+        CotaRPVCompetencia,
+        CotaRPVMovimento,
+        CotaRPVConsumo,
     )
     from app.seed import register_seed_commands
     from app.routes.auth import auth_bp
@@ -45,6 +48,7 @@ def create_app():
     from app.routes.historico import historico_bp
     from app.routes.observability import observability_bp
     from app.routes.reinf import reinf_bp
+    from app.routes.cotas import cotas_bp
     from app.routes.usuarios import usuarios_bp
 
     migrate.init_app(app, db)
@@ -57,6 +61,7 @@ def create_app():
     app.register_blueprint(historico_bp)
     app.register_blueprint(observability_bp)
     app.register_blueprint(reinf_bp)
+    app.register_blueprint(cotas_bp)
     app.register_blueprint(usuarios_bp)
     
 

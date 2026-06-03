@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+
+{% block title %}RPVs dativos - Editar dados da C.I.{% endblock %}
+{% block topbar_title %}RPVs dativos{% endblock %}
+{% block topbar_subtitle %}Ajustes seguros antes da movimentacao oficial{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Editar dados da C.I.</h1>
+        <p class="muted">Use esta tela para corrigir numero, data, responsavel ou cancelar a C.I. antes da movimentacao oficial.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn-secondary" href="{{ url_for('historico.detalhe', entidade_tipo='dativo_ci', entidade_id=dativo_ci.id) }}">Historico</a>
+        {% if not dativo_ci.possui_movimentacao_ativa and dativo_ci.status_normalizado == 'aberta' %}
+            <a class="btn btn-secondary" href="{{ url_for('dativos.detalhe_ci', ci_id=dativo_ci.id, retorno=url_retorno) }}">Abrir fluxo da C.I.</a>
+        {% endif %}
+        <a class="btn btn-secondary" href="{{ url_retorno }}">Voltar para C.I.s</a>
+    </div>
+</div>
+
+<div class="section-card">
+    <h2 class="section-card-title">Resumo atual</h2>
+    <div class="summary-grid">
+        <div class="readonly-box">
+            <strong>Status</strong><br>
+            {{ dativo_ci.status_legivel }}
+        </div>
+        <div class="readonly-box">
+            <strong>Exercicio</strong><br>
+            {{ dativo_ci.exercicio_formatado }}
+        </div>
+        <div class="readonly-box">
+            <strong>C.I.</strong><br>
+            {{ dativo_ci.processo_edoc }}
+        </div>
+        <div class="readonly-box">
+            <strong>Data da C.I.</strong><br>
+            {{ dativo_ci.data_ci.strftime('%d/%m/%Y') if dativo_ci.data_ci else '-' }}
+        </div>
+        <div class="readonly-box">
+            <strong>Responsavel operacional</strong><br>
+            {{ dativo_ci.responsavel.nome if dativo_ci.responsavel else '-' }}
+        </div>
+        <div class="readonly-box">
+            <strong>Movimentacao</strong><br>
+            {% if dativo_ci.possui_movimentacao_ativa %}Ja possui lote ou itens{% else %}Cabecalho ainda vazio{% endif %}
+        </div>
+    </div>
+</div>
+
+{% if dativo_ci.status_normalizado == 'descartada' %}
+<div class="section-card warning-panel">
+    <h2 class="section-card-title">C.I. cancelada sem apagar historico</h2>
+    <p class="muted">
+        Este cabecalho foi encerrado antes de entrar no fluxo oficial. Voce pode revisar, corrigir e reabrir
+        quando o numero e o caminho operacional estiverem confirmados.
+    </p>
+</div>
+{% endif %}
+
+{% set processo_crosscheck_scope = 'dativos' %}
+{% set processo_crosscheck_grade_vazia = true %}
+{% include "components/processo_crosscheck_card.html" %}
+
+{% if dativo_ci.pode_editar_cabecalho %}
+<div class="section-card content-card-narrow">
+    <h2 class="section-card-title">Edicao da C.I.</h2>
+    <form method="POST" action="{{ url_for('dativos.salvar_cabecalho_ci', ci_id=dativo_ci.id, retorno=url_retorno) }}" id="gerenciar-ci-form">
+        {{ csrf_input() }}
+        <input type="hidden" name="confirmar_ci_existente" id="confirmar_ci_existente" value="{{ form_data.get('confirmar_ci_existente', '0') }}">
+
+        <div class="form-group">
+            <label for="exercicio">Exercicio (mes/ano)</label>
+            <input type="month" id="exercicio" name="exercicio" value="{{ form_data.get('exercicio', dativo_ci.exercicio_input_value) }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="processo_edoc">C.I. / Processo e-Doc</label>
+            <input type="text" id="processo_edoc" name="processo_edoc" value="{{ form_data.get('processo_edoc', dativo_ci.processo_edoc) }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="data_ci">Data da C.I.</label>
+            <input type="date" id="data_ci" name="data_ci" value="{{ form_data.get('data_ci', dativo_ci.data_ci.strftime('%Y-%m-%d') if dativo_ci.data_ci else '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="responsavel_id">Responsavel operacional</label>
+            {% set responsavel_cabecalho = form_data.get('responsavel_id', dativo_ci.responsavel_id|string) %}
+            <select id="responsavel_id" name="responsavel_id" required>
+                {% for usuario in usuarios %}
+                    <option value="{{ usuario.id }}" {% if responsavel_cabecalho == usuario.id|string %}selected{% endif %}>
+                        {{ usuario.nome }}
+                    </option>
+                {% endfor %}
+            </select>
+            <small class="muted">
+                Enquanto a C.I. nao tiver lote nem itens, o numero e a data podem ser corrigidos sem apagar historico.
+            </small>
+        </div>
+
+        <div class="inline-cluster-sm content-top-14">
+            <button type="submit" class="btn">Salvar dados da C.I.</button>
+            {% if dativo_ci.pode_descartar %}
+            <button
+                type="submit"
+                class="btn btn-secondary"
+                formaction="{{ url_for('dativos.atualizar_status_ci', ci_id=dativo_ci.id, retorno=url_retorno) }}"
+                name="acao"
+                value="descartar"
+                onclick="return confirm('Cancelar esta C.I. sem apagar historico? O cabecalho saira da fila ativa e podera ser reaberto depois.');"
+            >
+                Enviar para cancelados
+            </button>
+            {% endif %}
+            {% if dativo_ci.pode_reabrir %}
+            <button
+                type="submit"
+                class="btn btn-secondary"
+                formaction="{{ url_for('dativos.atualizar_status_ci', ci_id=dativo_ci.id, retorno=url_retorno) }}"
+                name="acao"
+                value="reabrir"
+            >
+                Reabrir C.I.
+            </button>
+            {% endif %}
+            {% if busca_processo_contexto %}
+            <button
+                type="button"
+                class="btn btn-secondary"
+                onclick="document.getElementById('confirmar_ci_existente').value='1'; document.getElementById('gerenciar-ci-form').submit();"
+            >
+                Confirmar C.I./eDOC compartilhada e salvar mesmo assim
+            </button>
+            {% endif %}
+        </div>
+    </form>
+</div>
+{% else %}
+<div class="section-card warning-panel">
+    <h2 class="section-card-title">Cabecalho travado</h2>
+    <p class="muted">
+        Esta C.I. ja possui lote ou itens cadastrados. Para proteger o fluxo, o numero, a data e o cancelamento
+        do cabecalho nao ficam mais disponiveis neste nivel.
+    </p>
+    <a class="btn btn-secondary content-top-14" href="{{ url_for('dativos.detalhe_ci', ci_id=dativo_ci.id, retorno=url_retorno) }}">Voltar ao fluxo operacional</a>
+</div>
+{% endif %}
+{% endblock %}

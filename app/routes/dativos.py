@@ -17,6 +17,10 @@ from app.models import (
     User,
 )
 from app.services.audit_service import registrar_evento, snapshot_entidade
+from app.services.cotas_rpv_service import CotasRPVService
+from app.services.dativos_context_service import DativosContextService
+from app.services.dativos_dataset_service import DativosDatasetService
+from app.services.dativos_filter_service import DativosFilterService
 from app.services.irrf_calculator import calcular_irrf_operacional
 from app.services.dativos_service import DativosService
 from app.services.dativos_import_service import DativosImportService
@@ -74,15 +78,41 @@ def _match_busca_processual(texto_busca: str, processo_busca: str, *valores) -> 
 
 
 def _ci_sem_movimentacao(dativo_ci: DativoCI) -> bool:
-    lotes_ativos = [
-        lote for lote in getattr(dativo_ci, "lotes", [])
-        if getattr(lote, "ativo", True)
-    ]
-    itens_ativos = [
-        item for item in getattr(dativo_ci, "itens", [])
-        if getattr(item, "ativo", True)
-    ]
-    return not lotes_ativos and not itens_ativos
+    return not getattr(dativo_ci, "possui_movimentacao_ativa", False)
+
+
+def _ci_esta_descartada(dativo_ci: DativoCI) -> bool:
+    return getattr(dativo_ci, "status_normalizado", "aberta") == DativosService.STATUS_CI_DESCARTADA
+
+
+def _garantir_ci_aberta(dativo_ci: DativoCI) -> None:
+    if _ci_esta_descartada(dativo_ci):
+        raise ValueError(
+            "Esta C.I. esta cancelada e nao pode continuar no fluxo. "
+            "Reabra o cabecalho antes de importar ou adicionar itens."
+        )
+
+
+def _buscar_contexto_ci_compartilhada(
+    processo_edoc: str,
+    *,
+    retorno_url: str | None = None,
+):
+    contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(
+        processo_edoc,
+        retorno_url=retorno_url,
+    )
+    if not contexto:
+        return None
+
+    if not (
+        contexto.get("total_rpvs_normais")
+        or contexto.get("total_pendencias_documentais")
+        or contexto.get("total_cis_dativos")
+    ):
+        return None
+
+    return contexto
 
 
 def _flash_erro_duplicidade_item(mensagem_padrao: str, exc):
@@ -195,6 +225,7 @@ def _contexto_detalhe_ci(
     dativo_ci: DativoCI,
     *,
     ocorrencias_processo: list[dict] | None = None,
+    busca_processo_contexto: dict | None = None,
     form_data: dict | None = None,
     formulario_origem: str = "",
     importacao_unica_preview: dict | None = None,
@@ -223,9 +254,12 @@ def _contexto_detalhe_ci(
         "itens_com_irrf": itens_com_irrf,
         "usuarios": _carregar_usuarios_ativos(),
         "ocorrencias_processo": ocorrencias_processo or [],
+        "busca_processo_contexto": busca_processo_contexto,
         "form_data": form_data or {},
         "formulario_origem": formulario_origem,
         "importacao_unica_preview": importacao_unica_preview,
+        "pode_editar_cabecalho": getattr(dativo_ci, "pode_editar_cabecalho", False),
+        "ci_descartada": _ci_esta_descartada(dativo_ci),
         "url_retorno": _url_retorno_interna(url_for("dativos.lista_cis")),
     }
 
@@ -234,6 +268,7 @@ def _render_detalhe_ci(
     dativo_ci: DativoCI,
     *,
     ocorrencias_processo: list[dict] | None = None,
+    busca_processo_contexto: dict | None = None,
     form_data: dict | None = None,
     formulario_origem: str = "",
     importacao_unica_preview: dict | None = None,
@@ -243,11 +278,112 @@ def _render_detalhe_ci(
         **_contexto_detalhe_ci(
             dativo_ci,
             ocorrencias_processo=ocorrencias_processo,
+            busca_processo_contexto=busca_processo_contexto,
             form_data=form_data,
             formulario_origem=formulario_origem,
             importacao_unica_preview=importacao_unica_preview,
         ),
     )
+
+
+def _render_novo_ci(
+    *,
+    usuarios: list[User],
+    form_data: dict | None = None,
+    busca_processo_contexto: dict | None = None,
+):
+    return render_template(
+        "dativos/novo_ci.html",
+        usuarios=usuarios,
+        form_data=form_data or {},
+        busca_processo_contexto=busca_processo_contexto,
+    )
+
+
+def _render_gerenciar_cabecalho_ci(
+    dativo_ci: DativoCI,
+    *,
+    form_data: dict | None = None,
+    busca_processo_contexto: dict | None = None,
+):
+    return render_template(
+        "dativos/gerenciar_cabecalho_ci.html",
+        dativo_ci=dativo_ci,
+        usuarios=_carregar_usuarios_ativos(),
+        form_data=form_data or {},
+        busca_processo_contexto=busca_processo_contexto,
+        url_retorno=_url_retorno_interna(url_for("dativos.lista_cis")),
+    )
+
+
+def _coletar_triagem_home_dativos() -> dict:
+    cis_relacionadas = (
+        DativoCI.query.options(
+            selectinload(DativoCI.responsavel),
+            selectinload(DativoCI.criado_por),
+            selectinload(DativoCI.lotes),
+            selectinload(DativoCI.itens),
+        )
+        .filter(
+            or_(
+                DativoCI.responsavel_id == current_user.id,
+                DativoCI.criado_por_id == current_user.id,
+            )
+        )
+        .order_by(DativoCI.data_ci.desc(), DativoCI.criado_em.desc())
+        .all()
+    )
+
+    cis_em_preparacao = []
+    cis_criadas_fora_da_fila = []
+    cis_canceladas_sem_movimento = []
+
+    for dativo_ci in cis_relacionadas:
+        if not _ci_sem_movimentacao(dativo_ci):
+            continue
+
+        if _ci_esta_descartada(dativo_ci):
+            cis_canceladas_sem_movimento.append(dativo_ci)
+            continue
+
+        if dativo_ci.responsavel_id == current_user.id:
+            cis_em_preparacao.append(dativo_ci)
+            continue
+
+        if dativo_ci.criado_por_id == current_user.id:
+            cis_criadas_fora_da_fila.append(dativo_ci)
+
+    total_ci_ativas = DativoCI.query.filter(
+        DativoCI.responsavel_id == current_user.id,
+        DativoCI.status == DativosService.STATUS_CI_ABERTA,
+    ).count()
+    total_lotes_sem_irrf = (
+        DativoLote.query.join(DativoCI, DativoLote.dativo_ci_id == DativoCI.id)
+        .filter(
+            DativoCI.responsavel_id == current_user.id,
+            DativoLote.ativo.is_(True),
+            DativoLote.tipo_lote == "sem_irrf",
+        )
+        .count()
+    )
+    total_itens_com_irrf = (
+        DativoItem.query.join(DativoCI, DativoItem.dativo_ci_id == DativoCI.id)
+        .filter(
+            DativoCI.responsavel_id == current_user.id,
+            DativoItem.ativo.is_(True),
+            DativoItem.grupo == "com_irrf",
+        )
+        .count()
+    )
+
+    return {
+        "total_ci_ativas": total_ci_ativas,
+        "total_lotes_sem_irrf": total_lotes_sem_irrf,
+        "total_itens_com_irrf": total_itens_com_irrf,
+        "cis_em_preparacao": cis_em_preparacao,
+        "cis_criadas_fora_da_fila": cis_criadas_fora_da_fila,
+        "cis_canceladas_sem_movimento": cis_canceladas_sem_movimento,
+    }
 
 
 def _render_novo_item_lote(
@@ -326,245 +462,58 @@ def index():
     return redirect(url_for("dativos.lista_cis"))
 
 
+@dativos_bp.route("/cabecalhos-em-revisao")
+@dativos_bp.route("/sem-continuidade")
+@login_required
+def cabecalhos_em_revisao():
+    triagem = _coletar_triagem_home_dativos()
+    return render_template(
+        "dativos/cabecalhos_em_revisao.html",
+        total_ci=triagem["total_ci_ativas"],
+        total_lotes=triagem["total_lotes_sem_irrf"],
+        total_itens=triagem["total_itens_com_irrf"],
+        cis_em_preparacao=triagem["cis_em_preparacao"],
+        cis_criadas_fora_da_fila=triagem["cis_criadas_fora_da_fila"],
+        cis_canceladas_sem_movimento=triagem["cis_canceladas_sem_movimento"],
+    )
+
+
 @dativos_bp.route("/cis")
 @login_required
 def lista_cis():
-    q = request.args.get("q", "").strip()
-    ne = request.args.get("ne", "").strip()
-    exercicio = request.args.get("exercicio", "").strip()
-    ci = request.args.get("ci", "").strip()
-    responsavel = request.args.get("responsavel", "meus").strip() or "meus"
-    grupo = request.args.get("grupo", "todos").strip()
-    situacao_rpv_id = request.args.get("situacao_rpv_id", "").strip()
-    situacao_imposto_id = request.args.get("situacao_imposto_id", "").strip()
-    mostrar_encerrados = should_include_closed_in_queue(
-        request.args.get("mostrar_encerrados"),
-        situacao_rpv_id,
+    filtros = DativosFilterService.normalize_ci_filters(
+        request.args,
+        closed_queue_normalizer=should_include_closed_in_queue,
+        sort_direction_normalizer=sanitize_sort_direction,
+        page_normalizer=parse_page,
+        page_size_normalizer=parse_page_size,
     )
-    ordenar = request.args.get("ordenar", "exercicio").strip()
-    direcao = sanitize_sort_direction(request.args.get("direcao"), padrao="desc")
-    pagina = parse_page(request.args.get("pagina"), padrao=1)
-    por_pagina = parse_page_size(request.args.get("por_pagina"), padrao=20)
+    q = str(filtros["q"])
+    mostrar_encerrados = bool(filtros["mostrar_encerrados"])
+    ordenar = str(filtros["ordenar"])
+    direcao = str(filtros["direcao"])
+    pagina = int(filtros["pagina"])
+    por_pagina = int(filtros["por_pagina"])
 
     situacoes_rpv, situacoes_imposto = carregar_situacoes()
     situacoes_rpv_ocultas = collect_hidden_queue_status_ids(situacoes_rpv)
     usuarios = _carregar_usuarios_ativos()
 
-    query = DativoCI.query.options(
-        selectinload(DativoCI.responsavel),
-        selectinload(DativoCI.lotes),
-        selectinload(DativoCI.itens),
-    )
-
-    if exercicio:
-        query = query.filter(DativoCI.exercicio == exercicio)
-
-    if ci:
-        query = query.filter(DativoCI.processo_edoc.ilike(f"%{ci}%"))
-
-    if responsavel == "meus":
-        query = query.filter(DativoCI.responsavel_id == current_user.id)
-    elif responsavel and responsavel != "todos":
-        try:
-            query = query.filter(DativoCI.responsavel_id == int(responsavel))
-        except ValueError:
-            responsavel = "meus"
-            query = query.filter(DativoCI.responsavel_id == current_user.id)
-
-    cis = query.order_by(DativoCI.data_ci.desc(), DativoCI.criado_em.desc()).all()
-
     url_retorno_atual = current_internal_url(url_for("dativos.lista_cis"))
-    linhas = []
-    cis_incompletas = []
-    total_lotes = 0
-    total_itens_com_irrf = 0
-
-    q_lower = q.lower()
-    q_processo = normalizar_numero_processo(q)
-    q_doc = normalizar_documento(q)
-    ne_lower = ne.lower()
-    permitir_cis_incompletas = (
-        not ne
-        and grupo in ("", "todos")
-        and not situacao_rpv_id
-        and not situacao_imposto_id
+    dataset = DativosDatasetService.collect_ci_queue_dataset(
+        filtros=filtros,
+        current_user_id=current_user.id,
+        hidden_status_ids=situacoes_rpv_ocultas,
+        retorno_url=url_retorno_atual,
     )
-
-    def match_busca(*valores):
-        return _match_busca_processual(q_lower, q_processo, *valores)
-
-    def match_documento(documento_valor: str | None) -> bool:
-        if not q_doc:
-            return True
-        return q_doc in normalizar_documento(documento_valor or "")
-
-    for dativo_ci in cis:
-        if _ci_sem_movimentacao(dativo_ci):
-            if permitir_cis_incompletas and (
-                not q
-                or match_busca(
-                    dativo_ci.processo_edoc,
-                    dativo_ci.descricao,
-                    getattr(getattr(dativo_ci, "responsavel", None), "nome", None),
-                )
-            ):
-                cis_incompletas.append(dativo_ci)
-            continue
-
-        itens_lote_sem_irrf = [
-            item for item in dativo_ci.itens
-            if item.grupo == "sem_irrf"
-        ]
-        lote_sem_irrf = next(
-            (lote for lote in dativo_ci.lotes if lote.tipo_lote == "sem_irrf"),
-            None,
-        )
-
-        itens_com_irrf = [
-            item for item in dativo_ci.itens
-            if item.grupo == "com_irrf"
-        ]
-
-        if lote_sem_irrf:
-            lote_match = True
-
-            if grupo not in ("", "todos", "lote_sem_irrf"):
-                lote_match = False
-
-            if situacao_rpv_id and str(lote_sem_irrf.situacao_rpv_id) != situacao_rpv_id:
-                lote_match = False
-            elif (
-                not mostrar_encerrados
-                and lote_sem_irrf.situacao_rpv_id in situacoes_rpv_ocultas
-            ):
-                lote_match = False
-
-            if situacao_imposto_id and str(lote_sem_irrf.situacao_imposto_id) != situacao_imposto_id:
-                lote_match = False
-
-            busca_ok = match_busca(
-                dativo_ci.processo_edoc,
-                lote_sem_irrf.resumo_operacional,
-                lote_sem_irrf.nota_empenho,
-                lote_sem_irrf.numero_se,
-                lote_sem_irrf.ordem_bancaria,
-                *(item.numero_processo for item in itens_lote_sem_irrf),
-                *(item.nome_beneficiario for item in itens_lote_sem_irrf),
-            )
-            documento_ok = bool(q_doc) and any(
-                match_documento(item.cpf_original) for item in itens_lote_sem_irrf
-            )
-
-            if q and not (busca_ok or documento_ok):
-                lote_match = False
-
-            if ne and ne_lower not in str(lote_sem_irrf.nota_empenho or "").lower():
-                lote_match = False
-
-            if lote_match:
-                linhas.append({
-                    "tipo": "lote_sem_irrf",
-                    "id": lote_sem_irrf.id,
-                    "exercicio": dativo_ci.exercicio_formatado,
-                    "exercicio_valor": dativo_ci.exercicio,
-                    "grupo_label": "Lote sem IRRF",
-                    "grupo_ordem": 1,
-                    "resumo_operacional": lote_sem_irrf.resumo_operacional,
-                    "valor": lote_sem_irrf.valor_total_bruto,
-                    "imposto": lote_sem_irrf.valor_total_irrf,
-                    "ne": lote_sem_irrf.nota_empenho,
-                    "numero_se": getattr(lote_sem_irrf, "numero_se", None),
-                    "ob": lote_sem_irrf.ordem_bancaria,
-                    "ob_irrf": None,
-                    "situacao_rpv": lote_sem_irrf.situacao_rpv,
-                    "situacao_imposto": lote_sem_irrf.situacao_imposto,
-                    "situacao_rpv_id": lote_sem_irrf.situacao_rpv_id,
-                    "situacao_imposto_id": lote_sem_irrf.situacao_imposto_id,
-                    "abrir_url": url_for(
-                        "dativos.detalhe_lote_sem_irrf",
-                        lote_id=lote_sem_irrf.id,
-                        retorno=url_retorno_atual,
-                    ),
-                    "documento_label": "C.I.",
-                    "documento_valor": dativo_ci.processo_edoc,
-                    "responsavel_nome": (
-                        dativo_ci.responsavel.nome
-                        if dativo_ci.responsavel
-                        else "Nao informado"
-                    ),
-                    "data_referencia": dativo_ci.data_ci,
-                })
-                total_lotes += 1
-
-        for item in itens_com_irrf:
-            item_match = True
-
-            if grupo not in ("", "todos", "item_com_irrf"):
-                item_match = False
-
-            if situacao_rpv_id and str(item.situacao_rpv_id) != situacao_rpv_id:
-                item_match = False
-            elif not mostrar_encerrados and item.situacao_rpv_id in situacoes_rpv_ocultas:
-                item_match = False
-
-            if situacao_imposto_id and str(item.situacao_imposto_id) != situacao_imposto_id:
-                item_match = False
-
-            busca_ok = match_busca(
-                dativo_ci.processo_edoc,
-                item.numero_processo,
-                item.nome_beneficiario,
-                item.resumo_operacional_atual,
-                item.nota_empenho,
-                item.numero_se,
-                item.ordem_bancaria,
-                item.ob_imposto,
-            )
-
-            documento_ok = bool(q_doc) and match_documento(item.cpf_original)
-
-            if q and not (busca_ok or documento_ok):
-                item_match = False
-
-            if ne and ne_lower not in str(item.nota_empenho or "").lower():
-                item_match = False
-
-            if item_match:
-                linhas.append({
-                    "tipo": "item_com_irrf",
-                    "id": item.id,
-                    "exercicio": dativo_ci.exercicio_formatado,
-                    "exercicio_valor": dativo_ci.exercicio,
-                    "grupo_label": "Item com IRRF",
-                    "grupo_ordem": 2,
-                    "resumo_operacional": item.resumo_operacional_atual,
-                    "valor": item.valor_bruto,
-                    "imposto": item.valor_irrf or Decimal("0.00"),
-                    "ne": item.nota_empenho,
-                    "numero_se": getattr(item, "numero_se", None),
-                    "ob": item.ordem_bancaria,
-                    "ob_irrf": item.ob_imposto,
-                    "situacao_rpv": item.situacao_rpv,
-                    "situacao_imposto": item.situacao_imposto,
-                    "situacao_rpv_id": item.situacao_rpv_id,
-                    "situacao_imposto_id": item.situacao_imposto_id,
-                    "abrir_url": url_for(
-                        "dativos.detalhe_item_com_irrf",
-                        item_id=item.id,
-                        retorno=url_retorno_atual,
-                    ),
-                    "documento_label": item.tipo_documento_efetivo,
-                    "documento_valor": item.documento_formatado,
-                    "responsavel_nome": (
-                        dativo_ci.responsavel.nome
-                        if dativo_ci.responsavel
-                        else "Nao informado"
-                    ),
-                    "data_referencia": dativo_ci.data_ci,
-                })
-                total_itens_com_irrf += 1
-
-    total_ci = len(cis)
+    responsavel = str(dataset["responsavel"])
+    linhas = dataset["linhas"]
+    cis_incompletas = dataset["cis_incompletas"]
+    cis_incompletas_ocultas = dataset["cis_incompletas_ocultas"]
+    cis_descartadas = dataset["cis_descartadas"]
+    total_lotes = int(dataset["total_lotes"])
+    total_itens_com_irrf = int(dataset["total_itens_com_irrf"])
+    total_ci = int(dataset["total_ci"])
     ordenacao_mapa = {
         "exercicio": lambda linha: (
             str(linha.get("exercicio_valor") or ""),
@@ -578,82 +527,37 @@ def lista_cis():
     chave_ordenacao = ordenacao_mapa.get(ordenar, ordenacao_mapa["exercicio"])
     linhas.sort(key=chave_ordenacao, reverse=(direcao == "desc"))
     linhas_paginadas, paginacao = paginate_items(linhas, pagina, por_pagina)
-
-    filtros_dict = request.args.to_dict()
-    filtros_ocultos = merge_query_params(
-        filtros_dict,
-        pagina=None,
-        por_pagina=None,
-    )
-    sort_urls = {
-        chave: url_for(
-            "dativos.lista_cis",
-            **merge_query_params(
-                filtros_dict,
-                ordenar=chave,
-                direcao=resolve_next_sort_direction(ordenar, direcao, chave),
-                pagina=1,
-            ),
-        )
-        for chave in ordenacao_mapa
-    }
-    paginas_visiveis = build_page_window(
-        paginacao["total_paginas"],
-        paginacao["pagina"],
-    )
-    pagina_urls = {
-        numero: url_for(
-            "dativos.lista_cis",
-            **merge_query_params(filtros_dict, pagina=numero),
-        )
-        for numero in paginas_visiveis
-    }
-    pagina_anterior_url = (
-        url_for(
-            "dativos.lista_cis",
-            **merge_query_params(filtros_dict, pagina=paginacao["pagina_anterior"]),
-        )
-        if paginacao["tem_anterior"]
-        else None
-    )
-    proxima_pagina_url = (
-        url_for(
-            "dativos.lista_cis",
-            **merge_query_params(filtros_dict, pagina=paginacao["proxima_pagina"]),
-        )
-        if paginacao["tem_proxima"]
-        else None
-    )
     busca_processo_contexto = ProcessoCrosscheckService.buscar_contexto_pesquisa(
         q,
         retorno_url=url_retorno_atual,
     )
-    return render_template(
-        "dativos/lista_cis.html",
-        linhas=linhas_paginadas,
-        filtros=request.args,
-        filtros_ocultos=filtros_ocultos,
+    contexto = DativosContextService.build_ci_list_context(
+        filtros_request=request.args,
+        linhas_paginadas=linhas_paginadas,
         usuarios=usuarios,
         filtro_responsavel=responsavel,
         total_ci=total_ci,
-        total_ci_incompletas=len(cis_incompletas),
         total_lotes=total_lotes,
         total_itens_com_irrf=total_itens_com_irrf,
         cis_incompletas=cis_incompletas,
+        cis_incompletas_ocultas=cis_incompletas_ocultas,
+        cis_descartadas=cis_descartadas,
         situacoes_rpv=situacoes_rpv,
         situacoes_imposto=situacoes_imposto,
         ordenar_atual=ordenar,
         direcao_atual=direcao,
         por_pagina=por_pagina,
         paginacao=paginacao,
-        paginas_visiveis=paginas_visiveis,
-        pagina_urls=pagina_urls,
-        pagina_anterior_url=pagina_anterior_url,
-        proxima_pagina_url=proxima_pagina_url,
-        sort_urls=sort_urls,
         busca_processo_contexto=busca_processo_contexto,
         mostrar_encerrados=mostrar_encerrados,
         url_retorno_atual=url_retorno_atual,
+        page_window_builder=build_page_window,
+        query_params_merger=merge_query_params,
+        sort_direction_resolver=resolve_next_sort_direction,
+    )
+    return render_template(
+        "dativos/lista_cis.html",
+        **contexto,
     )
 
 
@@ -662,6 +566,7 @@ def lista_cis():
 def novo_ci():
     usuarios = _carregar_usuarios_ativos()
     form_data = request.form.to_dict(flat=True) if request.method == "POST" else {}
+    busca_processo_contexto = None
 
     if request.method == "POST":
         try:
@@ -671,6 +576,32 @@ def novo_ci():
             responsavel = _obter_usuario_responsavel(
                 request.form.get("responsavel_id", str(current_user.id))
             )
+            confirmar_ci_existente = request.form.get("confirmar_ci_existente") == "1"
+
+            ci_existente = DativoCI.query.filter_by(processo_edoc=processo_edoc).first()
+            if ci_existente:
+                flash(
+                    "Ja existe uma C.I. de dativo cadastrada com esse numero. "
+                    "Abra o cabecalho existente para corrigir, reabrir ou revisar o cancelamento.",
+                    "danger",
+                )
+                return redirect(url_for("dativos.detalhe_ci", ci_id=ci_existente.id))
+
+            busca_processo_contexto = _buscar_contexto_ci_compartilhada(
+                processo_edoc,
+                retorno_url=url_for("dativos.novo_ci"),
+            )
+            if busca_processo_contexto and not confirmar_ci_existente:
+                flash(
+                    "Esta C.I./eDOC ja aparece em outro ponto do sistema. "
+                    "Revise o contexto abaixo antes de continuar.",
+                    "warning",
+                )
+                return _render_novo_ci(
+                    usuarios=usuarios,
+                    form_data=form_data,
+                    busca_processo_contexto=busca_processo_contexto,
+                )
 
             dativo_ci = DativosService.criar_ci_dativo(
                 exercicio=exercicio,
@@ -687,9 +618,38 @@ def novo_ci():
                 resumo="C.I. criada",
                 forcar_registro=True,
             )
+            if confirmar_ci_existente and busca_processo_contexto:
+                registrar_evento(
+                    entidade_tipo="dativo_ci",
+                    entidade_id=dativo_ci.id,
+                    usuario_id=current_user.id,
+                    acao="Confirmacao de C.I./eDOC compartilhada",
+                    resumo=(
+                        f"C.I. criada com ocorrencias previas em {busca_processo_contexto['total_ocorrencias']} "
+                        "registro(s) do cruzamento."
+                    ),
+                )
             db.session.commit()
             flash("C.I. de dativo criada com sucesso.", "success")
-            return redirect(url_for("dativos.detalhe_ci", ci_id=dativo_ci.id))
+            retorno_lista = url_for(
+                "dativos.lista_cis",
+                responsavel="todos" if responsavel.id != current_user.id else "meus",
+                q=dativo_ci.processo_edoc,
+            )
+            if responsavel.id != current_user.id:
+                flash(
+                    "Esta C.I. ficou com outro responsavel. Ela nao foi apagada, "
+                    "mas pode ficar fora da visao 'So os meus'. O retorno desta tela "
+                    "ja aponta para a fila correta.",
+                    "info",
+                )
+            return redirect(
+                url_for(
+                    "dativos.detalhe_ci",
+                    ci_id=dativo_ci.id,
+                    retorno=retorno_lista,
+                )
+            )
 
         except (ValueError, InvalidOperation) as exc:
             db.session.rollback()
@@ -698,7 +658,11 @@ def novo_ci():
             db.session.rollback()
             flash(f"Erro ao criar C.I. de dativo: {exc}", "danger")
 
-    return render_template("dativos/novo_ci.html", usuarios=usuarios, form_data=form_data)
+    return _render_novo_ci(
+        usuarios=usuarios,
+        form_data=form_data,
+        busca_processo_contexto=busca_processo_contexto,
+    )
 
 
 @dativos_bp.route("/ci/<int:ci_id>/transferir-responsavel", methods=["POST"])
@@ -708,6 +672,7 @@ def transferir_responsavel_ci(ci_id):
     url_retorno = _url_retorno_interna(url_for("dativos.lista_cis"))
 
     try:
+        _garantir_ci_aberta(dativo_ci)
         responsavel = _obter_usuario_responsavel(request.form.get("responsavel_id"))
 
         if dativo_ci.responsavel_id == responsavel.id:
@@ -737,6 +702,137 @@ def transferir_responsavel_ci(ci_id):
         flash(f"Erro ao transferir responsabilidade da C.I.: {exc}", "danger")
 
     return redirect(url_for("dativos.detalhe_ci", ci_id=dativo_ci.id, retorno=url_retorno))
+
+
+@dativos_bp.route("/ci/<int:ci_id>/cabecalho", methods=["GET"])
+@login_required
+def gerenciar_cabecalho_ci(ci_id):
+    dativo_ci = DativoCI.query.get_or_404(ci_id)
+    return _render_gerenciar_cabecalho_ci(dativo_ci)
+
+
+@dativos_bp.route("/ci/<int:ci_id>/salvar-cabecalho", methods=["POST"])
+@login_required
+def salvar_cabecalho_ci(ci_id):
+    dativo_ci = DativoCI.query.get_or_404(ci_id)
+    form_data = request.form.to_dict(flat=True)
+    url_retorno = _url_retorno_interna(url_for("dativos.lista_cis"))
+
+    try:
+        antes = snapshot_entidade("dativo_ci", dativo_ci)
+        exercicio = request.form.get("exercicio", "").strip()
+        processo_edoc = request.form.get("processo_edoc", "").strip()
+        data_ci = parse_date(request.form.get("data_ci", "").strip())
+        responsavel = _obter_usuario_responsavel(
+            request.form.get("responsavel_id", str(dativo_ci.responsavel_id or current_user.id))
+        )
+        confirmar_ci_existente = request.form.get("confirmar_ci_existente") == "1"
+        busca_processo_contexto = _buscar_contexto_ci_compartilhada(
+            processo_edoc,
+            retorno_url=url_for("dativos.gerenciar_cabecalho_ci", ci_id=dativo_ci.id, retorno=url_retorno),
+        )
+
+        if busca_processo_contexto and not confirmar_ci_existente:
+            flash(
+                "Esta C.I./eDOC ja aparece em outro ponto do sistema. "
+                "Confirme manualmente antes de corrigir o cabecalho.",
+                "warning",
+            )
+            return _render_gerenciar_cabecalho_ci(
+                dativo_ci,
+                busca_processo_contexto=busca_processo_contexto,
+                form_data=form_data,
+            )
+
+        DativosService.atualizar_ci_dativo(
+            dativo_ci,
+            exercicio=exercicio,
+            processo_edoc=processo_edoc,
+            data_ci=data_ci,
+            responsavel_id=responsavel.id,
+            usuario_id=current_user.id,
+        )
+        _registrar_historico_entidade(
+            dativo_ci,
+            usuario_id=current_user.id,
+            acao="Correcao de cabecalho da C.I.",
+            antes=antes,
+            resumo="Cabecalho da C.I. corrigido antes da movimentacao oficial.",
+        )
+        if confirmar_ci_existente and busca_processo_contexto:
+            registrar_evento(
+                entidade_tipo="dativo_ci",
+                entidade_id=dativo_ci.id,
+                usuario_id=current_user.id,
+                acao="Confirmacao de C.I./eDOC compartilhada",
+                resumo=(
+                    f"Cabecalho corrigido com ocorrencias previas em {busca_processo_contexto['total_ocorrencias']} "
+                    "registro(s) do cruzamento."
+                ),
+            )
+        db.session.commit()
+        flash("Cabecalho da C.I. atualizado com sucesso.", "success")
+        return redirect(url_for("dativos.gerenciar_cabecalho_ci", ci_id=dativo_ci.id, retorno=url_retorno))
+    except (ValueError, InvalidOperation) as exc:
+        db.session.rollback()
+        flash(str(exc), "danger")
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"Erro ao atualizar cabecalho da C.I.: {exc}", "danger")
+
+    return _render_gerenciar_cabecalho_ci(
+        dativo_ci,
+        form_data=form_data,
+    )
+
+
+@dativos_bp.route("/ci/<int:ci_id>/status", methods=["POST"])
+@login_required
+def atualizar_status_ci(ci_id):
+    dativo_ci = DativoCI.query.get_or_404(ci_id)
+    url_retorno = _url_retorno_interna(url_for("dativos.lista_cis"))
+
+    try:
+        acao = request.form.get("acao", "").strip()
+        antes = snapshot_entidade("dativo_ci", dativo_ci)
+
+        if acao == "descartar":
+            DativosService.descartar_ci_dativo(dativo_ci, usuario_id=current_user.id)
+            _registrar_historico_entidade(
+                dativo_ci,
+                usuario_id=current_user.id,
+                acao="Cancelamento da C.I. em preparacao",
+                antes=antes,
+                resumo="A C.I. foi encerrada sem apagar historico e sem seguir para o fluxo oficial.",
+                forcar_registro=True,
+            )
+            db.session.commit()
+            flash("C.I. cancelada com seguranca. O historico foi preservado.", "info")
+            return redirect(url_for("dativos.lista_cis", mostrar_encerrados=1))
+
+        if acao == "reabrir":
+            DativosService.reabrir_ci_dativo(dativo_ci, usuario_id=current_user.id)
+            _registrar_historico_entidade(
+                dativo_ci,
+                usuario_id=current_user.id,
+                acao="Reabertura da C.I. em preparacao",
+                antes=antes,
+                resumo="A C.I. voltou para a fila de preparacao antes da movimentacao oficial.",
+                forcar_registro=True,
+            )
+            db.session.commit()
+            flash("C.I. reaberta com sucesso.", "success")
+            return redirect(url_for("dativos.gerenciar_cabecalho_ci", ci_id=dativo_ci.id, retorno=url_retorno))
+
+        raise ValueError("Acao de status invalida para a C.I.")
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "danger")
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"Erro ao atualizar status da C.I.: {exc}", "danger")
+
+    return redirect(url_for("dativos.gerenciar_cabecalho_ci", ci_id=dativo_ci.id, retorno=url_retorno))
 
 
 @dativos_bp.route("/atualizacao-lote", methods=["POST"])
@@ -846,6 +942,9 @@ def atualizacao_lote_cis():
 @login_required
 def detalhe_ci(ci_id):
     dativo_ci = DativoCI.query.get_or_404(ci_id)
+    url_retorno = _url_retorno_interna(url_for("dativos.lista_cis"))
+    if _ci_esta_descartada(dativo_ci):
+        return redirect(url_for("dativos.gerenciar_cabecalho_ci", ci_id=dativo_ci.id, retorno=url_retorno))
     preview_token = request.args.get("preview_token", "").strip()
     importacao_unica_preview = None
 
@@ -877,6 +976,7 @@ def importar_sem_irrf(ci_id):
     antes_ci = snapshot_entidade("dativo_ci", dativo_ci)
 
     try:
+        _garantir_ci_aberta(dativo_ci)
         arquivo = request.files.get("arquivo_sem_irrf")
 
         if not arquivo or not arquivo.filename:
@@ -985,6 +1085,7 @@ def importar_com_irrf(ci_id):
     antes_ci = snapshot_entidade("dativo_ci", dativo_ci)
 
     try:
+        _garantir_ci_aberta(dativo_ci)
         arquivo = request.files.get("arquivo_com_irrf")
 
         if not arquivo or not arquivo.filename:
@@ -1092,6 +1193,7 @@ def analisar_importacao_unica(ci_id):
     dativo_ci = DativoCI.query.get_or_404(ci_id)
 
     try:
+        _garantir_ci_aberta(dativo_ci)
         arquivo = request.files.get("arquivo_unico")
 
         if not arquivo or not arquivo.filename:
@@ -1153,6 +1255,7 @@ def confirmar_importacao_unica(ci_id):
     preview_token = request.form.get("preview_token", "").strip()
 
     try:
+        _garantir_ci_aberta(dativo_ci)
         preview = DativosImportService.carregar_previa_importacao_unica(
             preview_token,
             dativo_ci_id=dativo_ci.id,
@@ -1232,6 +1335,7 @@ def adicionar_item_sem_irrf(ci_id):
     form_data = request.form.to_dict(flat=True)
 
     try:
+        _garantir_ci_aberta(dativo_ci)
         nome_beneficiario = request.form.get("nome_beneficiario", "").strip()
         cpf_original = request.form.get("cpf_original", "").strip()
         numero_processo = request.form.get("numero_processo", "").strip()
@@ -1322,6 +1426,7 @@ def adicionar_item_com_irrf(ci_id):
     form_data = request.form.to_dict(flat=True)
 
     try:
+        _garantir_ci_aberta(dativo_ci)
         nome_beneficiario = request.form.get("nome_beneficiario", "").strip()
         cpf_original = request.form.get("cpf_original", "").strip()
         numero_processo = request.form.get("numero_processo", "").strip()
@@ -1569,6 +1674,7 @@ def novo_item_lote(lote_id):
                 antes=antes_lote,
                 resumo="Inclusão de beneficiário no lote",
             )
+            CotasRPVService.sincronizar_entidade(lote, usuario_id=current_user.id)
             if confirmar_processo_existente and ocorrencias_processo:
                 _registrar_historico_entidade(
                     item,
@@ -1701,6 +1807,7 @@ def editar_item_lote(lote_id, item_id):
                 antes=antes_lote,
                 resumo="Ajuste manual de beneficiário",
             )
+            CotasRPVService.sincronizar_entidade(lote, usuario_id=current_user.id)
             if confirmar_processo_existente and ocorrencias_processo:
                 _registrar_historico_entidade(
                     item,
@@ -1765,6 +1872,7 @@ def excluir_item_lote(lote_id, item_id):
             resumo="Beneficiário removido do lote",
             forcar_registro=True,
         )
+        CotasRPVService.sincronizar_entidade(lote, usuario_id=current_user.id)
 
         db.session.commit()
         flash("Beneficiário removido do lote com sucesso.", "success")
@@ -1827,6 +1935,7 @@ def atualizacao_rapida_lote(lote_id):
             acao="Atualização rápida",
             antes=antes,
         )
+        CotasRPVService.sincronizar_entidade(lote, usuario_id=current_user.id)
 
         db.session.commit()
         flash("Lote atualizado com sucesso.", "success")
@@ -1936,6 +2045,7 @@ def salvar_lote_sem_irrf(lote_id):
             acao="Alteração manual",
             antes=antes,
         )
+        CotasRPVService.sincronizar_entidade(lote, usuario_id=current_user.id)
 
         db.session.commit()
         flash("Detalhe do lote salvo com sucesso.", "success")
@@ -2012,6 +2122,7 @@ def atualizacao_rapida_item(item_id):
             acao="Atualização rápida",
             antes=antes,
         )
+        CotasRPVService.sincronizar_entidade(item, usuario_id=current_user.id)
 
         db.session.commit()
         flash("Item atualizado com sucesso.", "success")
@@ -2239,6 +2350,7 @@ def salvar_item_com_irrf(item_id):
             acao="Alteração manual",
             antes=antes,
         )
+        CotasRPVService.sincronizar_entidade(item, usuario_id=current_user.id)
 
         db.session.commit()
         flash("Item com IRRF atualizado com sucesso.", "success")

@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% import "components/value_display.html" as values %}
+
+{% block title %}Cotas - SISCON{% endblock %}
+{% block topbar_title %}Cotas{% endblock %}
+{% block topbar_subtitle %}Saldo mensal por ficha{% endblock %}
+
+{% block content %}
+<div class="dashboard-shell cotas-shell">
+    <section class="card hero-card cotas-hero-card">
+        <div class="cotas-hero-head">
+            <div>
+                <p class="kicker">Controle mensal</p>
+                <h1 class="hero-title">Cotas do mes</h1>
+                <p class="hero-copy">
+                    Saldo disponivel e consumo por ficha na competencia selecionada.
+                </p>
+            </div>
+            <form class="cotas-competencia-filter" method="GET" action="{{ url_for('cotas.index') }}">
+                <label for="competencia" class="metric-label">Competencia</label>
+                <div class="cotas-competencia-filter-row">
+                    <input id="competencia" name="competencia" type="month" value="{{ resumo_cotas.competencia }}" class="form-control">
+                    <button type="submit" class="btn btn-secondary">Atualizar</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="cotas-summary-grid">
+            {% for grupo in resumo_cotas.grupos %}
+                <article class="cota-summary-card {{ grupo.status_class }}" title="{{ grupo.percentual_restante_label }}">
+                    <div class="cota-summary-head">
+                        <div>
+                            <p class="hero-preview-kicker">Ficha {{ grupo.label }}</p>
+                            <span class="cota-summary-balance-label">Saldo disponivel</span>
+                            <h2 class="hero-preview-title">{{ values.render_value(grupo.saldo_disponivel, 'moeda', 'compact') }}</h2>
+                        </div>
+                        <span class="cota-summary-state">
+                            <span class="cota-summary-state-dot" aria-hidden="true"></span>
+                            {{ grupo.status_visual_label }}
+                        </span>
+                    </div>
+                    <div class="cota-summary-meta">
+                        <span>
+                            <small>Lançado</small>
+                            <strong>{{ values.render_value(grupo.valor_lancado, 'moeda', 'inline') }}</strong>
+                        </span>
+                        <span>
+                            <small>Consumido</small>
+                            <strong>{{ values.render_value(grupo.valor_consumido, 'moeda', 'inline') }}</strong>
+                        </span>
+                    </div>
+                    <p class="cota-summary-note">Historico medio: {{ grupo.cobertura_label }}</p>
+                    {% if grupo.tem_saldo_anterior_pendente %}
+                        <p class="cota-summary-note cota-summary-note-strong">Com saldo anterior: {{ values.render_value(grupo.saldo_anterior_pendente, 'moeda', 'inline') }}</p>
+                    {% else %}
+                        <p class="cota-summary-note cota-summary-note-strong">Sem saldo anterior pendente.</p>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="cotas-workbench-grid">
+        <article class="card cotas-form-card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Lancamento</p>
+                    <h2>Nova cota de {{ resumo_cotas.competencia_legivel }}</h2>
+                    <p class="section-caption">
+                        Informe o valor liberado para cada ficha.
+                    </p>
+                </div>
+            </div>
+
+            <form method="POST" action="{{ url_for('cotas.lancar') }}" class="cotas-form-grid" data-cotas-launch-form>
+                {{ csrf_input() }}
+                <label class="field">
+                    <span>Competencia</span>
+                    <input type="month" name="competencia" value="{{ resumo_cotas.competencia }}" class="form-control">
+                </label>
+                <label class="field">
+                    <span>Pessoal</span>
+                    <input type="text" name="valor_pessoal" class="form-control" placeholder="0,00" inputmode="numeric" autocomplete="off" spellcheck="false" data-currency-field data-currency-max-digits="14">
+                </label>
+                <label class="field">
+                    <span>Comum</span>
+                    <input type="text" name="valor_comum" class="form-control" placeholder="0,00" inputmode="numeric" autocomplete="off" spellcheck="false" data-currency-field data-currency-max-digits="14">
+                </label>
+                <label class="field">
+                    <span>Pericial</span>
+                    <input type="text" name="valor_pericial" class="form-control" placeholder="0,00" inputmode="numeric" autocomplete="off" spellcheck="false" data-currency-field data-currency-max-digits="14">
+                </label>
+                <div class="field field-full">
+                    <p class="cotas-input-hint">Digite só números. O sistema formata em moeda automaticamente. Ex.: <strong>120000</strong> vira <strong>1.200,00</strong>.</p>
+                </div>
+                <label class="field field-full">
+                    <span>Observacoes</span>
+                    <textarea name="observacoes" rows="3" class="form-control" placeholder="Ex.: cota enviada pelo financeiro para a competencia."></textarea>
+                </label>
+                <div class="field-full cotas-form-summary">
+                    <span class="cotas-form-summary-label">Total</span>
+                    <strong class="cotas-form-summary-value" data-cotas-total-preview>R$ 0,00</strong>
+                </div>
+                <div class="field-full cotas-form-actions">
+                    <button type="submit" class="btn btn-primary">Salvar cota</button>
+                </div>
+            </form>
+        </article>
+
+        <div class="cotas-side-stack">
+            <article class="card cotas-transfer-card">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-kicker">Saldo anterior</p>
+                        <h2>Transferir saldo</h2>
+                        <p class="section-caption">
+                            Leve o saldo pendente para a competencia atual quando necessario.
+                        </p>
+                    </div>
+                </div>
+
+                {% if resumo_cotas.saldos_anteriores_pendentes %}
+                    <div class="cotas-transfer-list">
+                        {% for item in resumo_cotas.saldos_anteriores_pendentes %}
+                            <form method="POST" action="{{ url_for('cotas.transferir') }}" class="cotas-transfer-row">
+                                {{ csrf_input() }}
+                                <input type="hidden" name="bucket_id" value="{{ item.bucket_id }}">
+                                <input type="hidden" name="competencia_destino" value="{{ resumo_cotas.competencia }}">
+                                <div>
+                                    <p class="cotas-transfer-title">{{ item.grupo_label }} vindo de {{ item.competencia_legivel }}</p>
+                                    <p class="cotas-transfer-copy">Saldo disponivel: {{ values.render_value(item.saldo_disponivel, 'moeda', 'inline') }}</p>
+                                </div>
+                                <button type="submit" class="btn btn-secondary">Transferir saldo</button>
+                            </form>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="empty-state">
+                        Nenhum saldo anterior pendente nesta competencia.
+                    </div>
+                {% endif %}
+            </article>
+
+            <article class="card cotas-transfer-card cotas-reconcile-card">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-kicker">Conciliacao manual</p>
+                        <h2>Sincronizar saldo oficial</h2>
+                        <p class="section-caption">
+                            Informe o saldo atual do sistema oficial. O SISCON calcula a diferenca e registra um ajuste manual auditavel.
+                        </p>
+                    </div>
+                </div>
+
+                <form method="POST" action="{{ url_for('cotas.conciliar') }}" class="cotas-form-grid cotas-reconcile-form">
+                    {{ csrf_input() }}
+                    <label class="field">
+                        <span>Competencia</span>
+                        <input type="month" name="competencia" value="{{ resumo_cotas.competencia }}" class="form-control" required>
+                    </label>
+                    <label class="field">
+                        <span>Ficha</span>
+                        <select name="grupo_cota" class="form-control" required>
+                            {% for grupo in resumo_cotas.grupos %}
+                                <option value="{{ grupo.key }}">{{ grupo.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label class="field field-full">
+                        <span>Saldo oficial atual</span>
+                        <input type="text" name="saldo_oficial_atual" class="form-control" placeholder="0,00" inputmode="numeric" autocomplete="off" spellcheck="false" data-currency-field data-currency-max-digits="14" required>
+                    </label>
+                    <label class="field field-full">
+                        <span>Justificativa</span>
+                        <textarea name="observacoes" rows="3" class="form-control" placeholder="Ex.: saldo oficial conferido no sistema interno e conciliado manualmente." required></textarea>
+                    </label>
+                    <div class="field field-full">
+                        <p class="cotas-input-hint">
+                            Use esta conciliacao quando o saldo oficial estiver maior ou menor que o saldo do SISCON. Nenhum movimento anterior e apagado.
+                        </p>
+                    </div>
+                    <div class="field-full cotas-form-actions">
+                        <button type="submit" class="btn btn-secondary">Conciliar saldo</button>
+                    </div>
+                </form>
+            </article>
+        </div>
+    </section>
+
+    <section class="cotas-workbench-grid">
+        <article class="card cotas-ledger-card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Movimentos</p>
+                    <h2>Historico</h2>
+                    <p class="section-caption">
+                        Lancamentos e transferencias registrados no modulo.
+                    </p>
+                </div>
+            </div>
+
+            {% if movimentos_cotas %}
+                <div class="table-shell">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Quando</th>
+                                <th>Competencia</th>
+                                <th>Ficha</th>
+                                <th>Movimento</th>
+                                <th>Valor</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for movimento in movimentos_cotas %}
+                                {% set bucket = movimento.competencia_ref %}
+                                <tr>
+                                    <td>{{ movimento.criado_em.strftime('%d/%m/%Y %H:%M') if movimento.criado_em else '-' }}</td>
+                                    <td>{{ bucket.competencia if bucket else '-' }}</td>
+                                    <td>{{ bucket.grupo_label if bucket else '-' }}</td>
+                                    <td>
+                                        {% if movimento.tipo_movimento == 'aporte_manual' %}
+                                            Aporte manual
+                                        {% elif movimento.tipo_movimento == 'transferencia_entrada' %}
+                                            Transferencia recebida de {{ movimento.referencia_competencia or '-' }}
+                                        {% elif movimento.tipo_movimento == 'transferencia_saida' %}
+                                            Transferencia enviada para {{ movimento.referencia_competencia or '-' }}
+                                        {% elif movimento.tipo_movimento == 'ajuste_manual' %}
+                                            Conciliacao manual do saldo
+                                        {% else %}
+                                            {{ movimento.tipo_movimento }}
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ values.render_value(movimento.valor, 'moeda', 'inline') }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    Nenhum movimento registrado ainda.
+                </div>
+            {% endif %}
+        </article>
+
+        <article class="card cotas-ledger-card">
+            <div class="section-heading">
+                <div>
+                    <p class="section-kicker">Consumo</p>
+                    <h2>Cotas em uso</h2>
+                    <p class="section-caption">
+                        Processos que ja consumiram saldo nesta etapa.
+                    </p>
+                </div>
+                <div class="cotas-consumo-toolbar">
+                    <span class="cotas-consumo-state">
+                        Exibindo: {{ "Todos" if consumos_view.incluir_pagos else "Em aberto" }}
+                    </span>
+                    <a
+                        class="cotas-consumo-toggle"
+                        href="{{ url_for('cotas.index', competencia=resumo_cotas.competencia, incluir_pagos=('0' if consumos_view.incluir_pagos else '1')) }}"
+                    >
+                        {{ "Ocultar pagos" if consumos_view.incluir_pagos else "Incluir pagos" }}
+                    </a>
+                    <p class="cotas-consumo-count">
+                        Mostrando {{ consumos_view.total_exibidos }} de {{ consumos_view.total_competencia }} reservas desta competencia
+                    </p>
+                </div>
+            </div>
+
+            {% if consumos_cotas %}
+                <div class="table-shell">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Competencia</th>
+                                <th>Ficha</th>
+                                <th>Origem</th>
+                                <th>Valor</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for consumo in consumos_cotas %}
+                                <tr>
+                                    <td>{{ consumo.competencia or '-' }}</td>
+                                    <td>{{ consumo.ficha_label or '-' }}</td>
+                                    <td>{{ consumo.resumo_origem }}</td>
+                                    <td>{{ values.render_value(consumo.valor_consumido, 'moeda', 'inline') }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    {% if consumos_view.total_competencia and not consumos_view.incluir_pagos %}
+                        Nenhuma reserva em aberto nesta competencia. Use "Incluir pagos" para ver as ja pagas.
+                    {% else %}
+                        Nenhum processo esta consumindo cota nesta competencia.
+                    {% endif %}
+                </div>
+            {% endif %}
+        </article>
+    </section>
+</div>
+{% endblock %}

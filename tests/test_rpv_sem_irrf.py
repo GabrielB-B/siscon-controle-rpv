@@ -1,527 +1,29 @@
-import unittest
-from datetime import date, datetime, timedelta
-import json
-import sqlite3
-import shutil
-import tempfile
-from decimal import Decimal
-from time import time
-from urllib.parse import parse_qs, urlsplit
-from pathlib import Path
-import re
-from uuid import uuid4
-from unittest.mock import patch
-
-from flask import Flask, g
-import pandas as pd
-from sqlalchemy import inspect as sa_inspect
-from app.extensions import db, login_manager
-from app.models import (
-    DativoCI,
-    DativoItem,
-    DativoLote,
-    HistoricoAlteracao,
-    PasswordResetToken,
-    Processo,
-    RegistroRPV,
-    RPVPendenciaDocumento,
-    SituacaoEmpenho,
-    SituacaoImposto,
-    TipoRPV,
-    User,
-)
-from app.observability import init_observability
-from app.routes.auth import auth_bp
-from app.routes.cadastros import cadastros_bp, precisa_alerta_irrf
-from app.routes.dashboard import (
+from tests.rpv_test_case_base import *
+from tests.rpv_test_case_base import (
     _agrupar_beneficiarios_fluxo_bi,
     _cards_bi,
+    _coletar_base_reinf,
     _coletar_dataset_bi,
     _exploracao_beneficiarios_fluxo_bi,
     _filtrar_dataset_bi,
     _query_dativos_bi,
+    _query_dativos_reinf,
     _query_registros_bi,
+    _query_rpvs_reinf,
+    _resumo_dativos_competencia,
+    _resumo_dativos_competencia_projetado,
     _resumo_grupos_cota,
+    _resumo_grupos_cota_projetado,
     _resumo_irrf_bi,
+    _serie_mensal_grupos_cota,
+    _serie_mensal_grupos_cota_projetada,
     _series_grupos_cota_bi,
-    dashboard_bp,
+    _series_grupos_cota_bi_projetado,
 )
-from app.routes.dativos import dativos_bp
-from app.routes.historico import historico_bp
-from app.routes.observability import observability_bp
-from app.routes.reinf import _coletar_base_reinf, _query_dativos_reinf, _query_rpvs_reinf, reinf_bp
-from app.routes.usuarios import usuarios_bp
-from app.services.irrf_calculator import calcular_irrf_operacional
-from app.services.notification_service import send_notification
-from app.services.password_reset_service import PasswordResetService
-from app.security import init_security
-from app.utils.datetime_utils import utc_now_naive
-from app.utils.formatters import formatar_documento_br, moeda_br
-from app.utils.irrf_rules import get_available_irrf_years
-from app.utils.request_meta import get_request_ip
-from app.utils.request_throttle import request_throttle
 
 
-class FakeHTTPResponse:
-    def __init__(self, body: str = "{}", status: int = 200):
-        self._body = body.encode("utf-8")
-        self.status = status
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, traceback):
-        return False
-
-    def read(self):
-        return self._body
-
-
-class RPVSemIRRFTestCase(unittest.TestCase):
-    def setUp(self):
-        self.notification_outbox = tempfile.mkdtemp(prefix="siscon-notifications-")
-        self.instance_dir = tempfile.mkdtemp(prefix="siscon-instance-")
-        request_throttle.clear_all()
-        self.app = Flask(
-            __name__,
-            template_folder=str(Path(__file__).resolve().parents[1] / "app" / "templates"),
-            instance_path=self.instance_dir,
-        )
-        self.app.config.update(
-            TESTING=True,
-            SECRET_KEY="teste",
-            CSRF_ENABLED=False,
-            SQLALCHEMY_DATABASE_URI="sqlite:///:memory:",
-            SQLALCHEMY_TRACK_MODIFICATIONS=False,
-            APP_RELEASE_LABEL="Atualizacao Operacional Atlas | Beta interna 2026.05 | Patch 003",
-            APP_EXTERNAL_URL="https://siscon.local",
-            NOTIFICATION_DELIVERY_MODE="file",
-            NOTIFICATION_OUTBOX_DIR=self.notification_outbox,
-            REQUEST_THROTTLE_BACKEND="sqlite",
-            OBSERVABILITY_ENABLE_FILE_LOGGING=False,
-            PASSWORD_RESET_CODE_TTL_MINUTES=10,
-            PASSWORD_RESET_TOKEN_TTL_MINUTES=10,
-            PASSWORD_RESET_CODE_MAX_ATTEMPTS=5,
-        )
-        self.app.jinja_env.filters["moeda_br"] = moeda_br
-        init_security(self.app)
-        init_observability(self.app)
-
-        @self.app.context_processor
-        def inject_app_release_label():
-            return {"app_release_label": self.app.config.get("APP_RELEASE_LABEL", "")}
-
-        db.init_app(self.app)
-        login_manager.init_app(self.app)
-        login_manager.login_view = "auth.login"
-
-        self.app.register_blueprint(auth_bp)
-        self.app.register_blueprint(dashboard_bp)
-        self.app.register_blueprint(cadastros_bp)
-        self.app.register_blueprint(dativos_bp)
-        self.app.register_blueprint(historico_bp)
-        self.app.register_blueprint(observability_bp)
-        self.app.register_blueprint(reinf_bp)
-        self.app.register_blueprint(usuarios_bp)
-
-        self.app_context = self.app.app_context()
-        self.app_context.push()
-        request_throttle.clear_all()
-        db.create_all()
-
-        self._seed_base()
-
-        self.client = self.app.test_client()
-        with self.client.session_transaction() as session:
-            session["_user_id"] = str(self.user_id)
-            session["_fresh"] = True
-
-    def tearDown(self):
-        db.session.remove()
-        db.drop_all()
-        self.app_context.pop()
-        shutil.rmtree(self.notification_outbox, ignore_errors=True)
-        shutil.rmtree(self.instance_dir, ignore_errors=True)
-
-    def _autenticar(self, user_id: int):
-        with self.client.session_transaction() as session:
-            session["_user_id"] = str(user_id)
-            session["_fresh"] = True
-        g.pop("_login_user", None)
-
-    def _arquivos_notificacao(self):
-        return sorted(Path(self.notification_outbox).glob("*.json"))
-
-    def _criar_planilha_ods(self, linhas: list[dict], nome_arquivo: str = "dativos_unico.ods") -> Path:
-        tempdir = tempfile.TemporaryDirectory()
-        self.addCleanup(tempdir.cleanup)
-        caminho = Path(tempdir.name) / nome_arquivo
-        pd.DataFrame(linhas).to_excel(caminho, index=False, engine="odf")
-        return caminho
-
-    def _ultima_notificacao(self) -> dict:
-        arquivos = self._arquivos_notificacao()
-        self.assertTrue(arquivos, "Nenhuma notificacao foi registrada no outbox de teste.")
-        return json.loads(arquivos[-1].read_text(encoding="utf-8"))
-
-    def _extrair_codigo_notificacao(self, notificacao: dict) -> str:
-        match = re.search(r"\b(\d{6})\b", notificacao.get("body", ""))
-        self.assertIsNotNone(match, "Nenhum codigo de 6 digitos foi encontrado na notificacao.")
-        return match.group(1)
-
-    def _preparar_sessao_recuperacao(
-        self,
-        cliente,
-        *,
-        request_id: int | None,
-        challenge_token: str | None,
-        expires_at,
-        destino: str = "contato protegido cadastrado",
-        channel: str = "email",
-    ):
-        with cliente.session_transaction() as session:
-            session["password_reset_pending_request_id"] = request_id
-            session["password_reset_pending_challenge_token"] = challenge_token
-            session["password_reset_pending_expires_at"] = expires_at.isoformat()
-            session["password_reset_pending_destino"] = destino
-            session["password_reset_pending_channel"] = channel
-
-    def _identificar_recuperacao(self, cliente, login: str, *, follow_redirects: bool = False):
-        return cliente.post(
-            "/esqueci-senha",
-            data={"form_step": "identificar", "login": login},
-            follow_redirects=follow_redirects,
-        )
-
-    def _enviar_codigo_recuperacao(
-        self,
-        cliente,
-        *,
-        login: str,
-        channel: str = "email",
-        follow_redirects: bool = True,
-    ):
-        self._identificar_recuperacao(cliente, login)
-        return cliente.post(
-            "/esqueci-senha",
-            data={"form_step": "enviar_codigo", "canal_recuperacao": channel},
-            follow_redirects=follow_redirects,
-        )
-
-    def _data_base_mes_atual(self):
-        return date.today().replace(day=1)
-
-    def _seed_base(self):
-        user = User(
-            nome="Usuário Teste",
-            login="teste",
-            email="teste@controle-rpv.local",
-            ativo=True,
-            is_admin=True,
-        )
-        user.set_password("senha123")
-
-        tipo_honorarios = TipoRPV(nome="RPV honorários", ativo=True, ordem_exibicao=1)
-        tipo_pessoal = TipoRPV(nome="RPV pessoal", ativo=True, ordem_exibicao=2)
-
-        situacao_empenho = SituacaoEmpenho(
-            nome="Sem Tratamento",
-            cor_badge="badge-slate",
-            ordem_fluxo=1,
-            ativo=True,
-            is_final=False,
-        )
-        situacao_imposto_pendente = SituacaoImposto(
-            nome="Sem Tratamento",
-            cor_badge="badge-slate",
-            ordem_fluxo=1,
-            ativo=True,
-            is_final=False,
-        )
-        situacao_imposto_sem_irrf = SituacaoImposto(
-            nome="Sem IRRF",
-            cor_badge="badge-slate",
-            ordem_fluxo=2,
-            ativo=True,
-            is_final=True,
-        )
-
-        db.session.add_all(
-            [
-                user,
-                tipo_honorarios,
-                tipo_pessoal,
-                situacao_empenho,
-                situacao_imposto_pendente,
-                situacao_imposto_sem_irrf,
-            ]
-        )
-        db.session.commit()
-
-        self.user_id = user.id
-        self.tipo_honorarios_id = tipo_honorarios.id
-        self.tipo_pessoal_id = tipo_pessoal.id
-        self.situacao_empenho_id = situacao_empenho.id
-        self.situacao_imposto_pendente_id = situacao_imposto_pendente.id
-        self.situacao_imposto_sem_irrf_id = situacao_imposto_sem_irrf.id
-
-    def _criar_situacao_empenho(self, nome: str, *, ordem_fluxo: int, is_final: bool) -> SituacaoEmpenho:
-        situacao = SituacaoEmpenho(
-            nome=nome,
-            cor_badge="badge-slate",
-            ordem_fluxo=ordem_fluxo,
-            ativo=True,
-            is_final=is_final,
-        )
-        db.session.add(situacao)
-        db.session.commit()
-        return situacao
-
-    def _criar_situacao_imposto(self, nome: str, *, ordem_fluxo: int, is_final: bool) -> SituacaoImposto:
-        situacao = SituacaoImposto(
-            nome=nome,
-            cor_badge="badge-slate",
-            ordem_fluxo=ordem_fluxo,
-            ativo=True,
-            is_final=is_final,
-        )
-        db.session.add(situacao)
-        db.session.commit()
-        return situacao
-
-    def _criar_rpv(
-        self,
-        *,
-        nome_beneficiario: str,
-        tipo_rpv_id: int | None = None,
-        valor_bruto: Decimal = Decimal("8000.00"),
-        valor_irrf=None,
-        sem_irrf: bool = False,
-        situacao_imposto_id: int | None = None,
-        data_pagamento=None,
-        data_pagamento_irrf=None,
-        documento_original: str | None = None,
-        processo_edoc: str | None = None,
-        numero_processo: str | None = None,
-        numero_se: str | None = None,
-        elaborador_id: int | None = None,
-        criado_por_id: int | None = None,
-        exercicio: str = "2026-03",
-    ) -> RegistroRPV:
-        sufixo = uuid4().hex[:8]
-
-        processo = Processo(
-            exercicio=exercicio,
-            processo_edoc=processo_edoc or f"CI-{sufixo}",
-            numero_processo=numero_processo or f"PROC-{sufixo}",
-            data_ci=date(2026, 3, 10),
-            data_cadastro=datetime(2026, 3, 10, 9, 0, 0),
-            observacoes_gerais=None,
-            criado_por_id=self.user_id,
-            atualizado_por_id=self.user_id,
-        )
-        db.session.add(processo)
-        db.session.flush()
-
-        registro = RegistroRPV(
-            processo_id=processo.id,
-            tipo_rpv_id=tipo_rpv_id or self.tipo_honorarios_id,
-            nome_beneficiario=nome_beneficiario,
-            nome_beneficiario_normalizado="",
-            tipo_documento="CPF",
-            documento_original=documento_original or f"12345678{sufixo[:3]}",
-            documento_normalizado="",
-            documento_corrigido=None,
-            data_pagamento=data_pagamento,
-            data_pagamento_irrf=data_pagamento_irrf,
-            valor_bruto=valor_bruto,
-            valor_irrf=valor_irrf,
-            valor_liquido=Decimal("0.00"),
-            possui_irrf=False,
-            sem_irrf=sem_irrf,
-            imposto_texto=None,
-            nota_empenho=None,
-            numero_se=numero_se,
-            situacao_empenho_id=self.situacao_empenho_id,
-            situacao_imposto_id=(
-                situacao_imposto_id
-                if situacao_imposto_id is not None
-                else (
-                    self.situacao_imposto_sem_irrf_id
-                    if sem_irrf
-                    else self.situacao_imposto_pendente_id
-                )
-            ),
-            ordem_bancaria=None,
-            reinf_status=None,
-            ob_imposto=None,
-            historico_auto="",
-            observacoes=None,
-            ativo=True,
-            criado_por_id=criado_por_id or self.user_id,
-            atualizado_por_id=self.user_id,
-            elaborador_id=elaborador_id or self.user_id,
-        )
-
-        registro.atualizar_campos_derivados()
-        registro.gerar_historico_auto(
-            processo_edoc=processo.processo_edoc,
-            numero_processo=processo.numero_processo,
-            descricao=registro.tipo_rpv.nome if registro.tipo_rpv else None,
-            data_ci=processo.data_ci,
-        )
-
-        db.session.add(registro)
-        db.session.commit()
-        return registro
-
-    def _criar_dativo_sem_irrf(
-        self,
-        *,
-        processo_edoc: str | None = None,
-        itens: list[dict] | None = None,
-        numero_se: str | None = None,
-        responsavel_id: int | None = None,
-        exercicio: str = "2026-03",
-    ):
-        sufixo = uuid4().hex[:8]
-        dativo_ci = DativoCI(
-            exercicio=exercicio,
-            processo_edoc=processo_edoc or f"CI-DAT-{sufixo}",
-            data_ci=date(2026, 3, 10),
-            descricao="Dativo Geral",
-            criado_por_id=self.user_id,
-            responsavel_id=responsavel_id or self.user_id,
-            atualizado_por_id=self.user_id,
-        )
-        db.session.add(dativo_ci)
-        db.session.flush()
-
-        lote = DativoLote(
-            dativo_ci_id=dativo_ci.id,
-            tipo_lote="sem_irrf",
-            quantidade_itens=0,
-            valor_total_bruto=Decimal("0.00"),
-            valor_total_irrf=Decimal("0.00"),
-            valor_total_liquido=Decimal("0.00"),
-            nota_empenho=None,
-            numero_se=numero_se,
-            ordem_bancaria=None,
-            situacao_rpv_id=self.situacao_empenho_id,
-            situacao_imposto_id=self.situacao_imposto_sem_irrf_id,
-            resumo_operacional="",
-            observacoes=None,
-            ativo=True,
-            criado_por_id=self.user_id,
-            atualizado_por_id=self.user_id,
-        )
-        db.session.add(lote)
-        db.session.flush()
-
-        itens_criados = []
-        for indice, dados in enumerate(itens or [], start=1):
-            item = DativoItem(
-                dativo_ci_id=dativo_ci.id,
-                dativo_lote_id=lote.id,
-                grupo="sem_irrf",
-                nome_beneficiario=dados["nome_beneficiario"],
-                nome_beneficiario_normalizado="",
-                cpf_original=dados.get("cpf_original", f"1234567890{indice}"),
-                cpf_normalizado="",
-                numero_processo=dados.get("numero_processo", f"PROC-DAT-{indice}-{sufixo}"),
-                data_pagamento=dados.get("data_pagamento"),
-                reinf_status=None,
-                dispensa_irrf_confirmada=dados.get("dispensa_irrf_confirmada", False),
-                valor_bruto=dados["valor_bruto"],
-                valor_irrf=None,
-                valor_liquido=Decimal("0.00"),
-                nota_empenho=None,
-                numero_se=numero_se,
-                ordem_bancaria=None,
-                ob_imposto=None,
-                situacao_rpv_id=self.situacao_empenho_id,
-                situacao_imposto_id=self.situacao_imposto_sem_irrf_id,
-                resumo_operacional="",
-                observacoes=None,
-                ativo=True,
-                criado_por_id=self.user_id,
-                atualizado_por_id=self.user_id,
-            )
-            item.atualizar_campos_derivados()
-            item.gerar_resumo_operacional(
-                processo_edoc=dativo_ci.processo_edoc,
-                data_ci=dativo_ci.data_ci,
-            )
-            db.session.add(item)
-            itens_criados.append(item)
-
-        db.session.flush()
-        lote.atualizar_totais()
-        lote.gerar_resumo_operacional()
-        db.session.commit()
-
-        return dativo_ci, lote, itens_criados
-
-    def _criar_item_dativo_com_irrf(
-        self,
-        *,
-        processo_edoc: str | None = None,
-        nome_beneficiario: str = "Item com IRRF",
-        cpf_original: str = "12345678901",
-        numero_processo: str | None = None,
-        valor_bruto: Decimal = Decimal("7000.00"),
-        valor_irrf: Decimal | None = Decimal("700.00"),
-        numero_se: str | None = None,
-        responsavel_id: int | None = None,
-    ):
-        dativo_ci = DativoCI(
-            exercicio="2026-03",
-            processo_edoc=processo_edoc or f"CI-DAT-IRRF-{uuid4().hex[:8]}",
-            data_ci=date(2026, 3, 10),
-            descricao="Dativo Geral",
-            criado_por_id=self.user_id,
-            responsavel_id=responsavel_id or self.user_id,
-            atualizado_por_id=self.user_id,
-        )
-        db.session.add(dativo_ci)
-        db.session.flush()
-
-        item = DativoItem(
-            dativo_ci_id=dativo_ci.id,
-            dativo_lote_id=None,
-            grupo="com_irrf",
-            nome_beneficiario=nome_beneficiario,
-            nome_beneficiario_normalizado="",
-            cpf_original=cpf_original,
-            cpf_normalizado="",
-            numero_processo=numero_processo or f"PROC-DAT-IRRF-{uuid4().hex[:6]}",
-            data_pagamento=None,
-            reinf_status=None,
-            dispensa_irrf_confirmada=False,
-            valor_bruto=valor_bruto,
-            valor_irrf=valor_irrf,
-            valor_liquido=Decimal("0.00"),
-            nota_empenho=None,
-            numero_se=numero_se,
-            ordem_bancaria=None,
-            ob_imposto=None,
-            situacao_rpv_id=self.situacao_empenho_id,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            resumo_operacional="",
-            observacoes=None,
-            ativo=True,
-            criado_por_id=self.user_id,
-            atualizado_por_id=self.user_id,
-        )
-        item.atualizar_campos_derivados()
-        item.gerar_resumo_operacional(
-            processo_edoc=dativo_ci.processo_edoc,
-            data_ci=dativo_ci.data_ci,
-        )
-        db.session.add(item)
-        db.session.commit()
-
-        return dativo_ci, item
+class RPVSemIRRFTestCase(BaseRPVSemIRRFTestCase):
+    __test__ = True
 
     def test_alerta_irrf_respeita_marcacao_sem_irrf(self):
         self.assertTrue(
@@ -2498,82 +2000,6 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn('href="/dativos/cis">Retornar', html)
         self.assertNotIn("exemplo.invalid", html)
 
-    def test_reinf_preserva_retorno_ao_abrir_rpv(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="Retorno REINF",
-            documento_original="39053344705",
-            numero_processo="PROC-RETORNO-REINF",
-            valor_irrf=Decimal("320.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 15),
-        )
-
-        resposta = self.client.get(
-            "/reinf/?competencia=2026-03&reinf_status=todos&q=Retorno&responsavel=todos&ordenar=imposto&direcao=desc"
-        )
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn(f"/rpvs/{registro.id}/editar?retorno=", html)
-        href_inicio = html.index(f'/rpvs/{registro.id}/editar?retorno=')
-        href_fim = html.index('"', href_inicio)
-        abrir_href = html[href_inicio:href_fim]
-        retorno = parse_qs(urlsplit(abrir_href).query).get("retorno", [""])[0]
-
-        self.assertTrue(retorno.startswith("/reinf/?competencia=2026-03"))
-        self.assertIn("q=Retorno", retorno)
-        self.assertIn("responsavel=todos", retorno)
-        self.assertIn("ordenar=imposto", retorno)
-        self.assertIn("direcao=desc", retorno)
-
-    def test_reinf_atualizacao_status_preserva_retorno_explicito(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="Status REINF Retorno",
-            valor_irrf=Decimal("410.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 18),
-        )
-        retorno = "/reinf/?competencia=2026-03&reinf_status=todos&q=Retorno&responsavel=todos"
-
-        resposta = self.client.post(
-            "/reinf/atualizar-status",
-            data={
-                "origem": "rpv",
-                "registro_id": str(registro.id),
-                "reinf_status": "Concluído",
-                "retorno": retorno,
-            },
-            follow_redirects=False,
-        )
-
-        self.assertEqual(resposta.status_code, 302)
-        self.assertEqual(resposta.headers["Location"], retorno)
-
-    def test_reinf_atualizacao_status_ignora_retorno_externo(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="Status REINF Externo",
-            valor_irrf=Decimal("410.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 18),
-        )
-
-        resposta = self.client.post(
-            "/reinf/atualizar-status",
-            data={
-                "origem": "rpv",
-                "registro_id": str(registro.id),
-                "reinf_status": "Concluído",
-                "retorno": "https://exemplo.invalid/reinf",
-            },
-            follow_redirects=False,
-        )
-
-        self.assertEqual(resposta.status_code, 302)
-        self.assertEqual(resposta.headers["Location"], "/reinf/")
-
     def test_edicao_sem_irrf_oculta_fluxo_fiscal_do_rpv(self):
         registro = self._criar_rpv(
             nome_beneficiario="RPV Sem Fiscal",
@@ -3247,13 +2673,14 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         db.session.add(dativo_ci)
         db.session.commit()
 
-        resposta = self.client.get("/dativos/cis")
+        resposta = self.client.get("/dativos/sem-continuidade")
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("C.I.s aguardando planilha", html)
-        self.assertIn("Abrir C.I. CI-DATIVO-INCOMPLETA", html)
-        self.assertIn("Pendentes de planilha:", html)
+        self.assertIn("Dativos sem continuidade", html)
+        self.assertIn("CI-DATIVO-INCOMPLETA", html)
+        self.assertIn("Abrir C.I.", html)
+        self.assertIn(f"/dativos/ci/{dativo_ci.id}", html)
 
     def test_lotes_sem_irrf_exibem_se_no_resumo_operacional(self):
         dativo_ci, lote, _ = self._criar_dativo_sem_irrf(
@@ -3510,6 +2937,36 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(dativo_ci.criado_por_id, self.user_id)
         self.assertEqual(dativo_ci.responsavel_id, usuario_secundario.id)
 
+    def test_nova_ci_dativo_com_outro_responsavel_retorna_para_fila_rastreavel(self):
+        usuario_secundario = User(
+            nome="Usuario Destino Retorno Dativo",
+            login="usuario.destino.retorno.dativo",
+            email="usuario.destino.retorno.dativo@controle-rpv.local",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_secundario.set_password("Senha1234")
+        db.session.add(usuario_secundario)
+        db.session.commit()
+
+        resposta = self.client.post(
+            "/dativos/novo-ci",
+            data={
+                "exercicio": "2026-03",
+                "processo_edoc": "CI-DATIVO-RETORNO-RASTREAVEL",
+                "data_ci": "2026-03-10",
+                "responsavel_id": str(usuario_secundario.id),
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        location = resposta.headers["Location"]
+        self.assertIn("/dativos/ci/", location)
+        self.assertIn("retorno=", location)
+        self.assertIn("responsavel%3Dtodos", location)
+        self.assertIn("q%3DCI-DATIVO-RETORNO-RASTREAVEL", location)
+
     def test_ci_dativo_permite_transferir_responsabilidade_e_reflete_nos_filtros(self):
         usuario_secundario = User(
             nome="Usuário Transferido Dativo",
@@ -3557,6 +3014,198 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         )
         self.assertIsNotNone(evento)
         self.assertIn("Usuário Transferido Dativo", evento.resumo)
+
+    def test_dativos_lista_cis_sinaliza_ci_incompleta_oculta_fora_da_fila_atual(self):
+        usuario_secundario = User(
+            nome="Usuario Oculto Dativo",
+            login="usuario.oculto.dativo",
+            email="usuario.oculto.dativo@controle-rpv.local",
+            ativo=True,
+            is_admin=False,
+        )
+        usuario_secundario.set_password("Senha1234")
+        db.session.add(usuario_secundario)
+        db.session.commit()
+
+        self._criar_ci_dativo_vazia(
+            processo_edoc="CI-DATIVO-OCULTA-FILA",
+            responsavel_id=usuario_secundario.id,
+        )
+
+        resposta = self.client.get("/dativos/sem-continuidade")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        dativo_ci = DativoCI.query.filter_by(processo_edoc="CI-DATIVO-OCULTA-FILA").one()
+        self.assertIn("Dativos sem continuidade", html)
+        self.assertIn("CI-DATIVO-OCULTA-FILA", html)
+        self.assertIn(f"/dativos/ci/{dativo_ci.id}", html)
+
+    def test_nova_ci_dativo_exige_confirmacao_quando_ci_ja_existe_em_rpv_normal(self):
+        self._criar_rpv(
+            nome_beneficiario="BENEFICIARIO RPV NORMAL",
+            processo_edoc="CI-CRUZADA-DATIVO",
+            numero_processo="PROC-CRUZADO-DATIVO",
+        )
+
+        resposta = self.client.post(
+            "/dativos/novo-ci",
+            data={
+                "exercicio": "2026-03",
+                "processo_edoc": "CI-CRUZADA-DATIVO",
+                "data_ci": "2026-03-10",
+                "responsavel_id": str(self.user_id),
+            },
+            follow_redirects=True,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("ja aparece em outro ponto do sistema", html)
+        self.assertIn("Confirmar C.I./eDOC compartilhada e continuar", html)
+        self.assertEqual(DativoCI.query.filter_by(processo_edoc="CI-CRUZADA-DATIVO").count(), 0)
+
+    def test_nova_ci_dativo_permite_confirmacao_para_ci_compartilhada(self):
+        self._criar_rpv(
+            nome_beneficiario="BENEFICIARIO RPV COMPARTILHADO",
+            processo_edoc="CI-CRUZADA-CONFIRMADA",
+            numero_processo="PROC-CRUZADO-CONFIRMADO",
+        )
+
+        resposta = self.client.post(
+            "/dativos/novo-ci",
+            data={
+                "exercicio": "2026-03",
+                "processo_edoc": "CI-CRUZADA-CONFIRMADA",
+                "data_ci": "2026-03-10",
+                "responsavel_id": str(self.user_id),
+                "confirmar_ci_existente": "1",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        dativo_ci = DativoCI.query.filter_by(processo_edoc="CI-CRUZADA-CONFIRMADA").one()
+        evento = (
+            HistoricoAlteracao.query.filter_by(
+                entidade_tipo="dativo_ci",
+                entidade_id=dativo_ci.id,
+                acao="Confirmacao de C.I./eDOC compartilhada",
+            )
+            .order_by(HistoricoAlteracao.id.desc())
+            .first()
+        )
+        self.assertIsNotNone(evento)
+
+    def test_ci_dativo_vazia_permite_corrigir_cabecalho(self):
+        dativo_ci = self._criar_ci_dativo_vazia(processo_edoc="CI-DATIVO-CORRIGE")
+
+        resposta = self.client.post(
+            f"/dativos/ci/{dativo_ci.id}/salvar-cabecalho",
+            data={
+                "exercicio": "2026-04",
+                "processo_edoc": "CI-DATIVO-CORRIGIDA",
+                "data_ci": "2026-04-15",
+                "responsavel_id": str(self.user_id),
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        db.session.expire_all()
+        dativo_ci_atualizada = db.session.get(DativoCI, dativo_ci.id)
+        self.assertEqual(dativo_ci_atualizada.exercicio, "2026-04")
+        self.assertEqual(dativo_ci_atualizada.processo_edoc, "CI-DATIVO-CORRIGIDA")
+        self.assertEqual(dativo_ci_atualizada.data_ci, date(2026, 4, 15))
+
+        evento = (
+            HistoricoAlteracao.query.filter_by(
+                entidade_tipo="dativo_ci",
+                entidade_id=dativo_ci.id,
+                acao="Correcao de cabecalho da C.I.",
+            )
+            .order_by(HistoricoAlteracao.id.desc())
+            .first()
+        )
+        self.assertIsNotNone(evento)
+        self.assertIn("corrigido", (evento.resumo or "").lower())
+
+    def test_ci_dativo_vazia_pode_ser_cancelada_e_reaberta_sem_apagar(self):
+        dativo_ci = self._criar_ci_dativo_vazia(processo_edoc="CI-DATIVO-CANCELA-SEGURA")
+
+        resposta_cancelar = self.client.post(
+            f"/dativos/ci/{dativo_ci.id}/status",
+            data={"acao": "descartar"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resposta_cancelar.status_code, 302)
+        db.session.expire_all()
+        dativo_ci_cancelada = db.session.get(DativoCI, dativo_ci.id)
+        self.assertEqual(dativo_ci_cancelada.status, "descartada")
+
+        resposta_lista = self.client.get("/dativos/cis")
+        html_lista = resposta_lista.get_data(as_text=True)
+        self.assertNotIn("CI-DATIVO-CANCELA-SEGURA", html_lista)
+
+        resposta_home = self.client.get("/dativos/sem-continuidade")
+        html_home = resposta_home.get_data(as_text=True)
+        self.assertIn("CI-DATIVO-CANCELA-SEGURA", html_home)
+        self.assertIn("cancelada sem movimento", html_home.lower())
+
+        resposta_detalhe = self.client.get(f"/dativos/ci/{dativo_ci.id}", follow_redirects=False)
+        self.assertEqual(resposta_detalhe.status_code, 302)
+        self.assertIn(f"/dativos/ci/{dativo_ci.id}/cabecalho", resposta_detalhe.headers["Location"])
+
+        resposta_reabrir = self.client.post(
+            f"/dativos/ci/{dativo_ci.id}/status",
+            data={"acao": "reabrir"},
+            follow_redirects=False,
+        )
+        self.assertEqual(resposta_reabrir.status_code, 302)
+        db.session.expire_all()
+        dativo_ci_reaberta = db.session.get(DativoCI, dativo_ci.id)
+        self.assertEqual(dativo_ci_reaberta.status, "aberta")
+
+    def test_ci_dativo_com_movimentacao_bloqueia_correcao_e_cancelamento_do_cabecalho(self):
+        dativo_ci, _, _ = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-DATIVO-BLOQUEADA",
+            itens=[
+                {
+                    "nome_beneficiario": "BENEFICIARIO MOVIMENTADO",
+                    "numero_processo": "PROC-DATIVO-BLOQUEADO",
+                    "valor_bruto": Decimal("1200.00"),
+                }
+            ],
+        )
+
+        resposta_edicao = self.client.post(
+            f"/dativos/ci/{dativo_ci.id}/salvar-cabecalho",
+            data={
+                "exercicio": "2026-04",
+                "processo_edoc": "CI-DATIVO-BLOQUEADA-NOVA",
+                "data_ci": "2026-04-15",
+                "responsavel_id": str(self.user_id),
+            },
+            follow_redirects=True,
+        )
+        html_edicao = resposta_edicao.get_data(as_text=True)
+        self.assertEqual(resposta_edicao.status_code, 200)
+        self.assertIn("nao pode ser corrigido ou cancelado depois da movimentacao", html_edicao)
+
+        resposta_cancelamento = self.client.post(
+            f"/dativos/ci/{dativo_ci.id}/status",
+            data={"acao": "descartar"},
+            follow_redirects=True,
+        )
+        html_cancelamento = resposta_cancelamento.get_data(as_text=True)
+        self.assertEqual(resposta_cancelamento.status_code, 200)
+        self.assertIn("nao pode ser corrigido ou cancelado depois da movimentacao", html_cancelamento)
+
+        db.session.expire_all()
+        dativo_ci_atual = db.session.get(DativoCI, dativo_ci.id)
+        self.assertEqual(dativo_ci_atual.processo_edoc, "CI-DATIVO-BLOQUEADA")
+        self.assertEqual(dativo_ci_atual.status, "aberta")
 
     def test_dativos_com_irrf_exibem_data_da_ci_em_resumo_legado(self):
         dativo_ci, item = self._criar_item_dativo_com_irrf(
@@ -4172,41 +3821,6 @@ class RPVSemIRRFTestCase(unittest.TestCase):
 
         self.assertNotIn("situacao_empenho", sa_inspect(registro_bi).unloaded)
         self.assertNotIn("situacao_rpv", sa_inspect(item_bi).unloaded)
-
-    def test_reinf_precarrega_situacoes_para_filtro_de_cancelamento(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="REINF Eager RPV",
-            valor_irrf=Decimal("210.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 12),
-        )
-        _, item = self._criar_item_dativo_com_irrf(
-            processo_edoc="CI-REINF-EAGER",
-            nome_beneficiario="REINF Eager Dativo",
-            cpf_original="10987654321",
-            numero_processo="PROC-REINF-EAGER",
-            valor_bruto=Decimal("5300.00"),
-            valor_irrf=Decimal("530.00"),
-        )
-        item.data_pagamento = date(2026, 3, 14)
-        db.session.commit()
-
-        registro_reinf = _query_rpvs_reinf(
-            competencia="2026-03",
-            filtro_responsavel="todos",
-            filtro_busca="",
-            ano=None,
-        ).filter(RegistroRPV.id == registro.id).one()
-        item_reinf = _query_dativos_reinf(
-            competencia="2026-03",
-            filtro_responsavel="todos",
-            filtro_busca="",
-            ano=None,
-        ).filter(DativoItem.id == item.id).one()
-
-        self.assertNotIn("situacao_empenho", sa_inspect(registro_reinf).unloaded)
-        self.assertNotIn("situacao_rpv", sa_inspect(item_reinf).unloaded)
 
     def test_dativos_atualiza_status_em_lote_para_lote_e_item(self):
         situacao_rpv_pago = SituacaoEmpenho(
@@ -5018,17 +4632,28 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         html = resposta.get_data(as_text=True)
 
         self.assertEqual(resposta.status_code, 200)
-        self.assertIn("O que pede continuidade agora", html)
+        self.assertIn("Resumo do setor", html)
         self.assertIn("Sinalizacao geral de RPVs normais", html)
         self.assertIn("Fila ativa por modulo", html)
         self.assertIn("Sinalizacao geral de RPVs dativos", html)
         self.assertNotIn("Dativos pagos em", html)
         self.assertNotIn("priority-summary-row", html)
         self.assertIn("Pendencias operacionais de IRRF", html)
-        self.assertIn("Fechamento REINF de", html)
-        self.assertIn("Abrir REINF da competencia", html)
+        self.assertIn("REINF de", html)
+        self.assertIn("Abrir REINF", html)
         self.assertIn("Painel Critico", html)
         self.assertIn("Responsavel: Usuário Teste", html)
+
+    def test_dashboard_home_sinaliza_dativos_sem_continuidade(self):
+        self._criar_ci_dativo_vazia(processo_edoc="CI-DATIVO-HOME-CORRECAO")
+
+        resposta = self.client.get("/")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Dativos sem continuidade", html)
+        self.assertIn("/dativos/sem-continuidade", html)
+        self.assertIn("Abrir fila", html)
 
     def test_dashboard_home_sinaliza_rpvs_normais_por_responsavel_e_status(self):
         usuario_secundario = User(
@@ -5427,21 +5052,6 @@ class RPVSemIRRFTestCase(unittest.TestCase):
             ),
         )
 
-    def test_reinf_ignora_registro_sem_data_pagamento(self):
-        self._criar_rpv(
-            nome_beneficiario="Sem Data REINF",
-            valor_irrf=Decimal("500.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=None,
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-03")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertNotIn("Sem Data REINF", html)
-
     def test_bi_filtra_origem_e_exporta_csv(self):
         self._criar_rpv(
             nome_beneficiario="RPV Normal BI",
@@ -5471,7 +5081,8 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("BI operacional", html)
         self.assertIn("Filtros de pesquisa", html)
         self.assertIn("filters-toggle", html)
-        self.assertIn("Dativo BI", html)
+        self.assertNotIn("Base analitica do recorte", html)
+        self.assertNotIn("Dativo BI", html)
         self.assertNotIn("RPV Normal BI", html)
 
         csv_resposta = self.client.get(
@@ -5693,6 +5304,8 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn("Sinais operacionais do ciclo", html)
         self.assertNotIn("Indicadores complementares", html)
         self.assertNotIn("<span>Total na janela</span>", html)
+        self.assertNotIn("Base analitica do recorte", html)
+        self.assertNotIn(">Conferencia</a>", html)
 
     def test_bi_conferencia_exibe_totais_mensais_e_total_geral(self):
         tipo_pericial = TipoRPV(nome="RPV periciais", ativo=True, ordem_exibicao=4)
@@ -5920,6 +5533,124 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertIn(item_aberto_janeiro.id, ids)
         self.assertNotIn(item_pago_fevereiro.id, ids)
 
+    def test_bi_query_registros_antecipa_filtro_de_grupo_e_tipo(self):
+        tipo_trabalhista = TipoRPV(nome="RPV trabalhista", ativo=True, ordem_exibicao=3)
+        tipo_pericial = TipoRPV(nome="RPV pericial", ativo=True, ordem_exibicao=4)
+        db.session.add_all([tipo_trabalhista, tipo_pericial])
+        db.session.commit()
+
+        registro_pessoal = self._criar_rpv(
+            nome_beneficiario="Query Grupo Pessoal",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 3, 11),
+        )
+        registro_trabalhista = self._criar_rpv(
+            nome_beneficiario="Query Grupo Trabalhista",
+            tipo_rpv_id=tipo_trabalhista.id,
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 3, 12),
+        )
+        registro_pericial = self._criar_rpv(
+            nome_beneficiario="Query Grupo Pericial",
+            tipo_rpv_id=tipo_pericial.id,
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 3, 13),
+        )
+        registro_comum = self._criar_rpv(
+            nome_beneficiario="Query Grupo Comum",
+            tipo_rpv_id=self.tipo_honorarios_id,
+            valor_irrf=Decimal("150.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 14),
+        )
+
+        filtros_grupo = {
+            "competencia_inicial": "2026-03",
+            "competencia_final": "2026-03",
+            "pagamento": "pagos",
+            "grupo_cota": "pessoal",
+            "tipo": "",
+        }
+        filtros_tipo = {
+            "competencia_inicial": "2026-03",
+            "competencia_final": "2026-03",
+            "pagamento": "pagos",
+            "grupo_cota": "todos",
+            "tipo": "RPV honorários",
+        }
+
+        with self.app.test_request_context("/bi"):
+            registros_grupo = _query_registros_bi(filtros_grupo, visao="operacional").all()
+            registros_tipo = _query_registros_bi(filtros_tipo, visao="operacional").all()
+
+        ids_grupo = {registro.id for registro in registros_grupo}
+        ids_tipo = {registro.id for registro in registros_tipo}
+
+        self.assertIn(registro_pessoal.id, ids_grupo)
+        self.assertIn(registro_trabalhista.id, ids_grupo)
+        self.assertNotIn(registro_pericial.id, ids_grupo)
+        self.assertNotIn(registro_comum.id, ids_grupo)
+        self.assertIn(registro_comum.id, ids_tipo)
+        self.assertNotIn(registro_pessoal.id, ids_tipo)
+        self.assertNotIn(registro_trabalhista.id, ids_tipo)
+        self.assertNotIn(registro_pericial.id, ids_tipo)
+
+    def test_bi_query_dativos_antecipa_filtro_de_grupo_e_tipo(self):
+        _, item_com_irrf = self._criar_item_dativo_com_irrf(
+            processo_edoc="CI-BI-QUERY-TIPO-COM",
+            nome_beneficiario="Query Dativo Com IRRF",
+            cpf_original="12345678901",
+            numero_processo="PROC-BI-QUERY-TIPO-COM",
+            valor_bruto=Decimal("5300.00"),
+            valor_irrf=Decimal("530.00"),
+        )
+        item_com_irrf.data_pagamento = date(2026, 3, 21)
+
+        _, _, itens_sem_irrf = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-BI-QUERY-TIPO-SEM",
+            exercicio="2026-03",
+            itens=[
+                {
+                    "nome_beneficiario": "Query Dativo Sem IRRF",
+                    "cpf_original": "11122233344",
+                    "numero_processo": "PROC-BI-QUERY-TIPO-SEM",
+                    "valor_bruto": Decimal("2700.00"),
+                    "data_pagamento": date(2026, 3, 22),
+                }
+            ],
+        )
+        item_sem_irrf = itens_sem_irrf[0]
+        db.session.commit()
+
+        filtros_grupo = {
+            "competencia_inicial": "2026-03",
+            "competencia_final": "2026-03",
+            "pagamento": "pagos",
+            "grupo_cota": "pericial",
+            "tipo": "",
+        }
+        filtros_tipo = {
+            "competencia_inicial": "2026-03",
+            "competencia_final": "2026-03",
+            "pagamento": "pagos",
+            "grupo_cota": "todos",
+            "tipo": "Dativo sem IRRF",
+        }
+
+        with self.app.test_request_context("/bi"):
+            itens_grupo = _query_dativos_bi(filtros_grupo, visao="operacional").all()
+            itens_tipo = _query_dativos_bi(filtros_tipo, visao="operacional").all()
+
+        self.assertEqual(itens_grupo, [])
+        ids_tipo = {item.id for item in itens_tipo}
+        self.assertIn(item_sem_irrf.id, ids_tipo)
+        self.assertNotIn(item_com_irrf.id, ids_tipo)
+
     def test_bi_monta_series_prioritarias_e_irrf_com_janela_modular(self):
         tipo_trabalhista = TipoRPV(nome="RPV trabalhista", ativo=True, ordem_exibicao=3)
         tipo_pericial = TipoRPV(nome="RPV pericial", ativo=True, ordem_exibicao=4)
@@ -6015,6 +5746,147 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resumo_irrf["acumulado_recorte"], Decimal("650.00"))
         self.assertEqual(resumo_irrf["acumulado_ano"], Decimal("650.00"))
         self.assertEqual(resumo_irrf["pagamentos_com_irrf"], 2)
+
+    def test_bi_projecao_operacional_preserva_resumos_execucao(self):
+        tipo_trabalhista = TipoRPV(nome="RPV trabalhista", ativo=True, ordem_exibicao=3)
+        tipo_pericial = TipoRPV(nome="RPV pericial", ativo=True, ordem_exibicao=4)
+        db.session.add_all([tipo_trabalhista, tipo_pericial])
+        db.session.commit()
+
+        self._criar_rpv(
+            nome_beneficiario="BI Projecao Pessoal",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_bruto=Decimal("1000.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 3, 11),
+        )
+        self._criar_rpv(
+            nome_beneficiario="BI Projecao Trabalhista",
+            tipo_rpv_id=tipo_trabalhista.id,
+            valor_bruto=Decimal("2000.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 2, 12),
+        )
+        self._criar_rpv(
+            nome_beneficiario="BI Projecao Pericial",
+            tipo_rpv_id=tipo_pericial.id,
+            valor_bruto=Decimal("3000.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            data_pagamento=date(2026, 3, 13),
+        )
+        self._criar_rpv(
+            nome_beneficiario="BI Projecao Comum",
+            tipo_rpv_id=self.tipo_honorarios_id,
+            valor_bruto=Decimal("4000.00"),
+            valor_irrf=Decimal("400.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 1, 14),
+        )
+        self._criar_rpv(
+            nome_beneficiario="BI Projecao Comum Mes",
+            tipo_rpv_id=self.tipo_honorarios_id,
+            valor_bruto=Decimal("2500.00"),
+            valor_irrf=Decimal("250.00"),
+            sem_irrf=False,
+            situacao_imposto_id=self.situacao_imposto_pendente_id,
+            data_pagamento=date(2026, 3, 16),
+        )
+        self._criar_dativo_sem_irrf(
+            processo_edoc="CI-BI-PROJECAO",
+            itens=[
+                {
+                    "nome_beneficiario": "BI Dativo Projecao",
+                    "cpf_original": "11122233344",
+                    "numero_processo": "PROC-BI-PROJECAO",
+                    "valor_bruto": Decimal("5000.00"),
+                    "data_pagamento": date(2026, 3, 18),
+                }
+            ],
+        )
+
+        filtros = {
+            "q": "",
+            "competencia_inicial": "2026-01",
+            "competencia_final": "2026-03",
+            "origem": "todos",
+            "grupo_cota": "todos",
+            "tipo": "",
+            "reinf": "todos",
+            "responsavel": "todos",
+            "pagamento": "todos",
+            "janela_meses": "12",
+        }
+
+        with self.app.test_request_context("/bi"):
+            dataset = _coletar_dataset_bi(filtros)
+            resumo_legado = _resumo_grupos_cota(dataset, filtros)
+            series_legado = _series_grupos_cota_bi(
+                dataset,
+                resumo_legado,
+                janela_meses=12,
+                filtros=filtros,
+            )
+            serie_mensal_legado = _serie_mensal_grupos_cota(dataset)
+            dativos_legado = _resumo_dativos_competencia(
+                dataset,
+                resumo_legado["competencia_referencia"],
+            )
+            projecao = BIProjectionService.build_operational_projection(filtros)
+            resumo_projetado = _resumo_grupos_cota_projetado(projecao, filtros)
+            series_projetado = _series_grupos_cota_bi_projetado(
+                projecao,
+                resumo_projetado,
+                janela_meses=12,
+                filtros=filtros,
+            )
+            serie_mensal_projetada = _serie_mensal_grupos_cota_projetada(projecao)
+            dativos_projetado = _resumo_dativos_competencia_projetado(
+                projecao,
+                resumo_projetado["competencia_referencia"],
+            )
+
+        self.assertEqual(resumo_projetado["competencia_referencia"], resumo_legado["competencia_referencia"])
+        self.assertEqual(resumo_projetado["total_mes_pago"], resumo_legado["total_mes_pago"])
+        self.assertEqual(resumo_projetado["total_ano_pago"], resumo_legado["total_ano_pago"])
+        self.assertEqual(resumo_projetado["total_em_aberto"], resumo_legado["total_em_aberto"])
+        self.assertEqual(resumo_projetado["total_previsao"], resumo_legado["total_previsao"])
+
+        grupos_legado = {grupo["chave"]: grupo for grupo in resumo_legado["grupos"]}
+        grupos_projetado = {grupo["chave"]: grupo for grupo in resumo_projetado["grupos"]}
+        self.assertEqual(set(grupos_legado.keys()), set(grupos_projetado.keys()))
+        for chave in grupos_legado:
+            self.assertEqual(grupos_projetado[chave]["valor_mes_pago"], grupos_legado[chave]["valor_mes_pago"])
+            self.assertEqual(grupos_projetado[chave]["valor_ano_pago"], grupos_legado[chave]["valor_ano_pago"])
+            self.assertEqual(grupos_projetado[chave]["valor_em_aberto"], grupos_legado[chave]["valor_em_aberto"])
+            self.assertEqual(grupos_projetado[chave]["valor_previsao"], grupos_legado[chave]["valor_previsao"])
+
+        series_legado_por_grupo = {grupo["chave"]: grupo for grupo in series_legado}
+        series_projetado_por_grupo = {grupo["chave"]: grupo for grupo in series_projetado}
+        self.assertEqual(set(series_legado_por_grupo.keys()), set(series_projetado_por_grupo.keys()))
+        for chave in series_legado_por_grupo:
+            self.assertEqual(
+                series_projetado_por_grupo[chave]["valor_total_janela"],
+                series_legado_por_grupo[chave]["valor_total_janela"],
+            )
+            self.assertEqual(
+                series_projetado_por_grupo[chave]["quantidade_total_janela"],
+                series_legado_por_grupo[chave]["quantidade_total_janela"],
+            )
+            self.assertEqual(
+                [item["valor_total"] for item in series_projetado_por_grupo[chave]["serie"]],
+                [item["valor_total"] for item in series_legado_por_grupo[chave]["serie"]],
+            )
+
+        self.assertEqual(
+            [(item["competencia"], item["valor_total"]) for item in serie_mensal_projetada],
+            [(item["competencia"], item["valor_total"]) for item in serie_mensal_legado],
+        )
+        self.assertEqual(dativos_projetado["total_valor"], dativos_legado["total_valor"])
+        self.assertEqual(dativos_projetado["total_quantidade"], dativos_legado["total_quantidade"])
 
     def test_bi_exibe_irrf_retido_por_beneficiario_e_competencia(self):
         self._criar_rpv(
@@ -7065,479 +6937,6 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(eventos[0].acao, "Alteração manual")
         self.assertTrue(any(item["rotulo"] == "Beneficiário" for item in eventos[0].alteracoes))
 
-    def test_reinf_bloqueia_competencia_posterior_com_pendencia_anterior(self):
-        self._criar_rpv(
-            nome_beneficiario="REINF Marco Pendente",
-            valor_irrf=Decimal("410.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 18),
-        )
-        self._criar_rpv(
-            nome_beneficiario="REINF Abril Pendente",
-            valor_irrf=Decimal("510.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 4, 3),
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-04")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn('value="2026-03"', html)
-        self.assertIn("fechamento do REINF permanece em", html)
-        self.assertIn("REINF Marco Pendente", html)
-        self.assertNotIn("REINF Abril Pendente", html)
-
-    def test_reinf_cancelado_nao_bloqueia_competencia_posterior(self):
-        registro_marco = self._criar_rpv(
-            nome_beneficiario="REINF Marco Cancelado",
-            valor_irrf=Decimal("410.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 18),
-        )
-        registro_marco.reinf_status = "Cancelado"
-        db.session.commit()
-
-        self._criar_rpv(
-            nome_beneficiario="REINF Abril Livre",
-            valor_irrf=Decimal("510.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 4, 3),
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-04&reinf_status=todos")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn('value="2026-04"', html)
-        self.assertNotIn("fechamento do REINF permanece em", html)
-        self.assertIn("REINF Abril Livre", html)
-
-    def test_reinf_exporta_csv_com_documento_e_resumo(self):
-        self._criar_rpv(
-            nome_beneficiario="Exporta REINF",
-            valor_irrf=Decimal("350.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 16),
-        )
-
-        resposta = self.client.get("/reinf/exportar.csv?competencia=2026-03&reinf_status=todos")
-        conteudo = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Exporta REINF", conteudo)
-        self.assertIn("12345678", conteudo)
-        self.assertIn("IRRF", conteudo)
-
-    def test_reinf_exibe_beneficiario_com_documento_limpo_e_sem_cards_analiticos(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="Beneficiario Limpo",
-            valor_irrf=Decimal("420.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 16),
-            documento_original="123.456.789-01",
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-03")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Filtros de pesquisa", html)
-        self.assertIn("Beneficiario Limpo", html)
-        self.assertIn("12345678901", html)
-        self.assertIn("Conferencia mensal", html)
-        self.assertIn("Conferencia anual", html)
-        self.assertNotIn("Menu da area REINF", html)
-        self.assertNotIn("Pagos com IRRF", html)
-        self.assertNotIn("Pendentes de envio", html)
-        self.assertNotIn(f"Processo {registro.processo.numero_processo}", html)
-
-    def test_reinf_operacional_abre_em_ordem_alfabetica_por_beneficiario(self):
-        self._criar_rpv(
-            nome_beneficiario="Zeta REINF Padrao",
-            documento_original="33333333333",
-            valor_irrf=Decimal("330.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 5),
-        )
-        self._criar_rpv(
-            nome_beneficiario="Alfa REINF Padrao",
-            documento_original="11111111111",
-            valor_irrf=Decimal("110.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 19),
-        )
-        self._criar_rpv(
-            nome_beneficiario="Alfa REINF Padrao",
-            documento_original="22222222222",
-            valor_irrf=Decimal("220.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 7),
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-03&reinf_status=todos")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Ordenação:</strong> Beneficiário", html)
-        self.assertIn("Direção:</strong> Crescente", html)
-        primeira_alfa = html.index("11111111111")
-        segunda_alfa = html.index("22222222222")
-        zeta = html.index("Zeta REINF Padrao")
-        self.assertLess(primeira_alfa, segunda_alfa)
-        self.assertLess(segunda_alfa, zeta)
-
-    def test_reinf_conferencia_mensal_exibe_tabela_limpa_por_beneficiario(self):
-        self._criar_rpv(
-            nome_beneficiario="Conferencia Mensal",
-            documento_original="12345678901",
-            valor_bruto=Decimal("3000.00"),
-            valor_irrf=Decimal("300.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 10),
-        )
-        _, item_irrf = self._criar_item_dativo_com_irrf(
-            processo_edoc="CI-CONF-MENSAL",
-            nome_beneficiario="Conferencia Mensal",
-            cpf_original="12345678901",
-            numero_processo="PROC-CONF-MENSAL-2",
-            valor_bruto=Decimal("2200.00"),
-            valor_irrf=Decimal("220.00"),
-        )
-        item_irrf.data_pagamento = date(2026, 3, 21)
-        self._criar_rpv(
-            nome_beneficiario="Conferencia Mensal CPF Menor",
-            documento_original="02345678901",
-            valor_bruto=Decimal("1000.00"),
-            valor_irrf=Decimal("100.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 12),
-        )
-
-        self._criar_dativo_sem_irrf(
-            processo_edoc="CI-CONF-MENSAL-LIVRE",
-            itens=[
-                {
-                    "nome_beneficiario": "Nao Deve Entrar",
-                    "cpf_original": "99988877766",
-                    "numero_processo": "PROC-CONF-MENSAL-LIVRE",
-                    "valor_bruto": Decimal("900.00"),
-                    "data_pagamento": date(2026, 3, 25),
-                }
-            ],
-        )
-        db.session.commit()
-
-        resposta = self.client.get("/reinf/?visao=conferencia_mensal&competencia=2026-03")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Voltar para REINF mensal", html)
-        self.assertIn("Ir para anual", html)
-        self.assertIn("Conferencia mensal por beneficiario", html)
-        self.assertIn("Valor base", html)
-        self.assertIn("IRRF retido", html)
-        self.assertLess(
-            html.index("023.456.789-01"),
-            html.index("123.456.789-01"),
-        )
-        self.assertIn("Conferencia Mensal", html)
-        self.assertIn("023.456.789-01", html)
-        self.assertIn("123.456.789-01", html)
-        self.assertIn("março/2026", html)
-        self.assertIn("5.200,00", html)
-        self.assertIn("520,00", html)
-        self.assertIn("Nenhum processo conferido", html)
-        self.assertIn("0/2", html)
-        self.assertIn("Por conferir", html)
-        self.assertIn("Marcar", html)
-        self.assertIn("Ver processos", html)
-        self.assertIn("Valor bruto", html)
-        self.assertIn("Liquido", html)
-        self.assertIn("data-reinf-progress-summary", html)
-        self.assertIn("data-reinf-review-toggle", html)
-        self.assertIn("este processo", html)
-        self.assertIn("/reinf/marcar-conferencia-processo", html)
-        self.assertIn("PROC-CONF-MENSAL-2", html)
-        self.assertNotIn("Abrir", html)
-        self.assertNotIn("Nao Deve Entrar", html)
-        self.assertNotIn("Atualizar selecionados", html)
-        self.assertNotIn("Status REINF", html)
-
-    def test_reinf_conferencia_mensal_persiste_processo_conferido_no_historico(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="Conferencia Persistida",
-            documento_original="12345678901",
-            valor_bruto=Decimal("3000.00"),
-            valor_irrf=Decimal("300.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 10),
-        )
-        _, item_irrf = self._criar_item_dativo_com_irrf(
-            processo_edoc="CI-CONF-PERSISTIDA",
-            nome_beneficiario="Conferencia Persistida",
-            cpf_original="12345678901",
-            numero_processo="PROC-CONF-PERSISTIDA-2",
-            valor_bruto=Decimal("2200.00"),
-            valor_irrf=Decimal("220.00"),
-        )
-        item_irrf.data_pagamento = date(2026, 3, 21)
-        db.session.commit()
-
-        resposta = self.client.post(
-            "/reinf/marcar-conferencia-processo",
-            data={
-                "origem": "rpv",
-                "registro_id": str(registro.id),
-                "revisado": "1",
-                "retorno": "/reinf/?visao=conferencia_mensal&competencia=2026-03",
-            },
-            headers={
-                "Accept": "application/json",
-                "X-Requested-With": "fetch",
-            },
-            follow_redirects=False,
-        )
-        payload = resposta.get_json()
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertTrue(payload["ok"])
-        self.assertTrue(payload["created"])
-        self.assertTrue(payload["reviewed"])
-        self.assertIn("Conferido por", payload["reviewed_meta"])
-
-        eventos = (
-            HistoricoAlteracao.query.filter_by(
-                entidade_tipo="registro_rpv",
-                entidade_id=registro.id,
-                acao="Conferencia REINF mensal",
-            )
-            .order_by(HistoricoAlteracao.id.asc())
-            .all()
-        )
-        self.assertEqual(len(eventos), 1)
-
-        resposta_repetida = self.client.post(
-            "/reinf/marcar-conferencia-processo",
-            data={
-                "origem": "rpv",
-                "registro_id": str(registro.id),
-                "revisado": "1",
-                "retorno": "/reinf/?visao=conferencia_mensal&competencia=2026-03",
-            },
-            headers={
-                "Accept": "application/json",
-                "X-Requested-With": "fetch",
-            },
-            follow_redirects=False,
-        )
-        payload_repetido = resposta_repetida.get_json()
-
-        self.assertEqual(resposta_repetida.status_code, 200)
-        self.assertTrue(payload_repetido["ok"])
-        self.assertFalse(payload_repetido["created"])
-        self.assertTrue(payload_repetido["reviewed"])
-        self.assertEqual(
-            HistoricoAlteracao.query.filter_by(
-                entidade_tipo="registro_rpv",
-                entidade_id=registro.id,
-                acao="Conferencia REINF mensal",
-            ).count(),
-            1,
-        )
-
-        resposta_html = self.client.get("/reinf/?visao=conferencia_mensal&competencia=2026-03")
-        html = resposta_html.get_data(as_text=True)
-
-        self.assertEqual(resposta_html.status_code, 200)
-        self.assertIn("1 de 2 processo(s) conferido(s)", html)
-        self.assertIn("1/2", html)
-        self.assertIn("processos conferidos", html)
-        self.assertIn("Conferido por", html)
-
-        resposta_desmarcar = self.client.post(
-            "/reinf/marcar-conferencia-processo",
-            data={
-                "origem": "rpv",
-                "registro_id": str(registro.id),
-                "revisado": "0",
-                "retorno": "/reinf/?visao=conferencia_mensal&competencia=2026-03",
-            },
-            headers={
-                "Accept": "application/json",
-                "X-Requested-With": "fetch",
-            },
-            follow_redirects=False,
-        )
-        payload_desmarcado = resposta_desmarcar.get_json()
-
-        self.assertEqual(resposta_desmarcar.status_code, 200)
-        self.assertTrue(payload_desmarcado["ok"])
-        self.assertTrue(payload_desmarcado["created"])
-        self.assertFalse(payload_desmarcado["reviewed"])
-        self.assertEqual(
-            HistoricoAlteracao.query.filter_by(
-                entidade_tipo="registro_rpv",
-                entidade_id=registro.id,
-                acao="Conferencia REINF mensal",
-            ).count(),
-            2,
-        )
-
-        resposta_html_desmarcada = self.client.get("/reinf/?visao=conferencia_mensal&competencia=2026-03")
-        html_desmarcado = resposta_html_desmarcada.get_data(as_text=True)
-
-        self.assertEqual(resposta_html_desmarcada.status_code, 200)
-        self.assertIn("Nenhum processo conferido", html_desmarcado)
-        self.assertIn("0/2", html_desmarcado)
-        self.assertIn("Por conferir", html_desmarcado)
-        self.assertNotIn("Conferido por", html_desmarcado)
-
-    def test_reinf_conferencia_anual_exibe_total_do_ano_e_detalhamento_por_exercicio(self):
-        self._criar_rpv(
-            nome_beneficiario="Conferencia Anual",
-            documento_original="12345678901",
-            valor_bruto=Decimal("3100.00"),
-            valor_irrf=Decimal("310.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 2, 12),
-        )
-        _, item_irrf = self._criar_item_dativo_com_irrf(
-            processo_edoc="CI-CONF-ANUAL",
-            nome_beneficiario="Conferencia Anual",
-            cpf_original="12345678901",
-            numero_processo="PROC-CONF-ANUAL-2",
-            valor_bruto=Decimal("2400.00"),
-            valor_irrf=Decimal("240.00"),
-        )
-        item_irrf.data_pagamento = date(2026, 4, 5)
-
-        self._criar_dativo_sem_irrf(
-            processo_edoc="CI-CONF-ANUAL-LIVRE",
-            itens=[
-                {
-                    "nome_beneficiario": "Fora da Anual",
-                    "cpf_original": "99988877766",
-                    "numero_processo": "PROC-CONF-ANUAL-LIVRE",
-                    "valor_bruto": Decimal("1500.00"),
-                    "data_pagamento": date(2026, 6, 8),
-                }
-            ],
-        )
-        db.session.commit()
-
-        resposta = self.client.get("/reinf/?visao=conferencia_anual&ano=2026")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Conferencia anual por beneficiario", html)
-        self.assertIn("Valor total do ano", html)
-        self.assertIn("IRRF retido no ano", html)
-        self.assertIn("Conferencia Anual", html)
-        self.assertIn("123.456.789-01", html)
-        self.assertIn("5.500,00", html)
-        self.assertIn("550,00", html)
-        self.assertIn("Voltar para REINF mensal", html)
-        self.assertIn("Ir para mensal", html)
-        self.assertIn("Ver exercicios", html)
-        self.assertIn("fevereiro/2026", html)
-        self.assertIn("abril/2026", html)
-        self.assertIn("Valor bruto", html)
-        self.assertIn("3.100,00", html)
-        self.assertIn("310,00", html)
-        self.assertIn("2.790,00", html)
-        self.assertIn("2.400,00", html)
-        self.assertIn("240,00", html)
-        self.assertIn("2.160,00", html)
-        self.assertNotIn("PROC-CONF-ANUAL-2", html)
-        self.assertNotIn("CI-CONF-ANUAL", html)
-        self.assertNotIn("Abrir", html)
-        self.assertNotIn("Fora da Anual", html)
-        self.assertNotIn("Atualizar selecionados", html)
-        self.assertNotIn("Status REINF", html)
-
-    def test_reinf_atualiza_status_em_lote(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="Lote REINF",
-            valor_irrf=Decimal("410.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 18),
-        )
-
-        resposta = self.client.post(
-            "/reinf/atualizar-status-lote",
-            data={
-                "reinf_status_lote": "Concluído",
-                "selecionados": [f"rpv:{registro.id}"],
-            },
-            follow_redirects=False,
-        )
-
-        self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = db.session.get(RegistroRPV, registro.id)
-        self.assertEqual(registro_atualizado.reinf_status_legivel, "Concluído")
-
-    def test_reinf_nao_sobrescreve_status_individual_sem_status_no_post(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="REINF Sem Status Individual",
-            valor_irrf=Decimal("410.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 18),
-        )
-        registro.reinf_status = "Concluído"
-        db.session.commit()
-
-        resposta = self.client.post(
-            "/reinf/atualizar-status",
-            data={
-                "origem": "rpv",
-                "registro_id": str(registro.id),
-            },
-            follow_redirects=False,
-        )
-
-        self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = db.session.get(RegistroRPV, registro.id)
-        self.assertEqual(registro_atualizado.reinf_status, "Concluído")
-
-    def test_reinf_nao_sobrescreve_status_lote_sem_status_no_post(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="REINF Sem Status Lote",
-            valor_irrf=Decimal("410.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 18),
-        )
-        registro.reinf_status = "Cancelado"
-        db.session.commit()
-
-        resposta = self.client.post(
-            "/reinf/atualizar-status-lote",
-            data={
-                "selecionados": [f"rpv:{registro.id}"],
-            },
-            follow_redirects=False,
-        )
-
-        self.assertEqual(resposta.status_code, 302)
-        registro_atualizado = db.session.get(RegistroRPV, registro.id)
-        self.assertEqual(registro_atualizado.reinf_status, "Cancelado")
-
     def test_admin_pode_limpar_status_reinf(self):
         registro = self._criar_rpv(
             nome_beneficiario="Limpeza REINF Admin",
@@ -7606,76 +7005,6 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resposta.status_code, 302)
         registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.reinf_status, "Concluído")
-
-    def test_reinf_aplica_ordenacao_e_paginacao(self):
-        self._criar_rpv(
-            nome_beneficiario="REINF Menor",
-            valor_irrf=Decimal("100.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 18),
-        )
-        self._criar_rpv(
-            nome_beneficiario="REINF Maior",
-            valor_irrf=Decimal("450.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 19),
-        )
-
-        resposta = self.client.get(
-            "/reinf/?competencia=2026-03&reinf_status=todos&ordenar=imposto&direcao=desc&por_pagina=1&pagina=1"
-        )
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("REINF Maior", html)
-        self.assertNotIn("REINF Menor", html)
-        self.assertIn("Página 1 de 2", html)
-
-    def test_reinf_nao_exibe_opcao_meus_no_filtro_de_responsavel(self):
-        resposta = self.client.get("/reinf/?competencia=2026-03")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertNotIn('option value="meus"', html)
-
-    def test_reinf_exibe_colunas_fixas_na_grade(self):
-        self._criar_rpv(
-            nome_beneficiario="REINF Sticky",
-            valor_irrf=Decimal("220.00"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 20),
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-03")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("sticky-left-1", html)
-        self.assertIn("sticky-right-1", html)
-
-    def test_reinf_operacional_exibe_bloco_financeiro_com_bruto_e_irrf(self):
-        self._criar_rpv(
-            nome_beneficiario="REINF Financeiro",
-            valor_bruto=Decimal("4321.98"),
-            valor_irrf=Decimal("321.98"),
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 22),
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-03&reinf_status=todos&q=Financeiro")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("reinf-finance-cell", html)
-        self.assertIn("Financeiro", html)
-        self.assertIn("Bruto", html)
-        self.assertIn("4.321,98", html)
-        self.assertIn("IRRF", html)
-        self.assertIn("321,98", html)
 
     def test_edicao_salva_data_pagamento_principal_e_irrf_em_campos_separados(self):
         registro = self._criar_rpv(
@@ -7873,53 +7202,6 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         self.assertEqual(resposta.status_code, 302)
         registro_atualizado = db.session.get(RegistroRPV, registro.id)
         self.assertEqual(registro_atualizado.reinf_status, "Concluído")
-
-    def test_reinf_exclui_rpv_marcado_sem_irrf(self):
-        self._criar_rpv(
-            nome_beneficiario="Oculto Reinf",
-            valor_irrf=None,
-            sem_irrf=True,
-            data_pagamento=date(2026, 3, 15),
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-03")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertNotIn("Oculto Reinf", html)
-
-    def test_reinf_exibe_rpv_pendente_quando_irrf_ainda_nao_foi_informado(self):
-        self._criar_rpv(
-            nome_beneficiario="Pendente Reinf",
-            valor_irrf=None,
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_pendente_id,
-            data_pagamento=date(2026, 3, 15),
-        )
-
-        resposta = self.client.get("/reinf/?competencia=2026-03")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertIn("Pendente Reinf", html)
-        self.assertIn("IRRF PENDENTE", html)
-
-    def test_reinf_preserva_compatibilidade_com_registro_legado_sem_irrf(self):
-        registro = self._criar_rpv(
-            nome_beneficiario="Legado Sem IRRF",
-            valor_irrf=None,
-            sem_irrf=False,
-            situacao_imposto_id=self.situacao_imposto_sem_irrf_id,
-            data_pagamento=date(2026, 3, 15),
-        )
-
-        self.assertTrue(registro.sem_irrf_efetivo)
-
-        resposta = self.client.get("/reinf/?competencia=2026-03")
-        html = resposta.get_data(as_text=True)
-
-        self.assertEqual(resposta.status_code, 200)
-        self.assertNotIn("Legado Sem IRRF", html)
 
     def test_edicao_rpv_impede_ne_repetida_e_indica_onde_ela_esta(self):
         registro_origem = self._criar_rpv(
@@ -8174,6 +7456,703 @@ class RPVSemIRRFTestCase(unittest.TestCase):
         db.session.expire_all()
         lote_atualizado = db.session.get(DativoLote, lote.id)
         self.assertEqual(lote_atualizado.situacao_rpv_id, self.situacao_empenho_id)
+
+    def test_cotas_consumem_e_estornam_rpv_pelo_status_se_aprovada(self):
+        situacao_se_aprovada = self._criar_situacao_empenho(
+            "SE Aprovada - Gerar NE",
+            ordem_fluxo=4,
+            is_final=False,
+        )
+        registro = self._criar_rpv(
+            nome_beneficiario="RPV Cota Pessoal",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_bruto=Decimal("12000.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            exercicio="2026-05",
+        )
+
+        registro.situacao_empenho = situacao_se_aprovada
+        registro.situacao_empenho_id = situacao_se_aprovada.id
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=self.user_id)
+        db.session.commit()
+
+        bucket = CotaRPVCompetencia.query.filter_by(
+            competencia="2026-05",
+            grupo_cota="pessoal",
+        ).first()
+        self.assertIsNotNone(bucket)
+        consumo_ativo = CotaRPVConsumo.query.filter_by(
+            origem_tipo="registro_rpv",
+            origem_id=registro.id,
+            ativo=True,
+        ).first()
+        self.assertIsNotNone(consumo_ativo)
+        self.assertEqual(Decimal(consumo_ativo.valor_consumido), Decimal("12000.00"))
+
+        registro.situacao_empenho_id = self.situacao_empenho_id
+        registro.situacao_empenho = db.session.get(SituacaoEmpenho, self.situacao_empenho_id)
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=self.user_id)
+        db.session.commit()
+
+        self.assertIsNone(
+            CotaRPVConsumo.query.filter_by(
+                origem_tipo="registro_rpv",
+                origem_id=registro.id,
+                ativo=True,
+            ).first()
+        )
+
+    def test_cotas_recalculam_consumo_do_rpv_quando_valor_muda(self):
+        situacao_se_aprovada = self._criar_situacao_empenho(
+            "SE Aprovada - Gerar NE",
+            ordem_fluxo=4,
+            is_final=False,
+        )
+        registro = self._criar_rpv(
+            nome_beneficiario="RPV Recalculo Cota",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_bruto=Decimal("12000.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            exercicio="2026-05",
+        )
+
+        registro.situacao_empenho = situacao_se_aprovada
+        registro.situacao_empenho_id = situacao_se_aprovada.id
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=self.user_id)
+        db.session.commit()
+
+        consumo_ativo = CotaRPVConsumo.query.filter_by(
+            origem_tipo="registro_rpv",
+            origem_id=registro.id,
+            ativo=True,
+        ).first()
+        self.assertIsNotNone(consumo_ativo)
+        self.assertEqual(Decimal(consumo_ativo.valor_consumido), Decimal("12000.00"))
+
+        registro.valor_bruto = Decimal("14500.00")
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=self.user_id)
+        db.session.commit()
+
+        consumo_ativo_atualizado = CotaRPVConsumo.query.filter_by(
+            origem_tipo="registro_rpv",
+            origem_id=registro.id,
+            ativo=True,
+        ).first()
+        self.assertIsNotNone(consumo_ativo_atualizado)
+        self.assertEqual(
+            Decimal(consumo_ativo_atualizado.valor_consumido),
+            Decimal("14500.00"),
+        )
+        self.assertEqual(
+            CotaRPVConsumo.query.filter_by(
+                origem_tipo="registro_rpv",
+                origem_id=registro.id,
+            ).count(),
+            2,
+        )
+
+    def test_cotas_recalculam_consumo_do_lote_sem_irrf(self):
+        situacao_se_aprovada = self._criar_situacao_empenho(
+            "SE Aprovada - Gerar NE",
+            ordem_fluxo=4,
+            is_final=False,
+        )
+        _, lote, itens = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-COTA-LOTE",
+            exercicio="2026-05",
+            itens=[
+                {
+                    "nome_beneficiario": "Lote Consumido",
+                    "cpf_original": "11122233344",
+                    "numero_processo": "PROC-COTA-LOTE",
+                    "valor_bruto": Decimal("5000.00"),
+                }
+            ],
+        )
+
+        lote.situacao_rpv = situacao_se_aprovada
+        lote.situacao_rpv_id = situacao_se_aprovada.id
+        CotasRPVService.sincronizar_entidade(lote, usuario_id=self.user_id)
+        db.session.commit()
+
+        consumo_ativo = CotaRPVConsumo.query.filter_by(
+            origem_tipo="dativo_lote",
+            origem_id=lote.id,
+            ativo=True,
+        ).first()
+        self.assertEqual(Decimal(consumo_ativo.valor_consumido), Decimal("5000.00"))
+
+        item = itens[0]
+        item.valor_bruto = Decimal("7000.00")
+        item.atualizar_campos_derivados()
+        lote.atualizar_totais()
+        CotasRPVService.sincronizar_entidade(lote, usuario_id=self.user_id)
+        db.session.commit()
+
+        consumo_ativo_atualizado = CotaRPVConsumo.query.filter_by(
+            origem_tipo="dativo_lote",
+            origem_id=lote.id,
+            ativo=True,
+        ).first()
+        self.assertEqual(
+            Decimal(consumo_ativo_atualizado.valor_consumido),
+            Decimal("7000.00"),
+        )
+        self.assertEqual(
+            CotaRPVConsumo.query.filter_by(
+                origem_tipo="dativo_lote",
+                origem_id=lote.id,
+            ).count(),
+            2,
+        )
+
+    def test_cotas_transferem_saldo_pendente_para_competencia_seguinte(self):
+        CotasRPVService.registrar_aportes(
+            competencia="2026-04",
+            valores_por_grupo={
+                "pessoal": Decimal("0.00"),
+                "comum": Decimal("15000.00"),
+                "pericial": Decimal("0.00"),
+            },
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        origem = CotaRPVCompetencia.query.filter_by(
+            competencia="2026-04",
+            grupo_cota="comum",
+        ).first()
+        valor_transferido = CotasRPVService.transferir_saldo_integral(
+            origem_competencia_id=origem.id,
+            competencia_destino="2026-05",
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        destino = CotaRPVCompetencia.query.filter_by(
+            competencia="2026-05",
+            grupo_cota="comum",
+        ).first()
+        self.assertEqual(valor_transferido, Decimal("15000.00"))
+        self.assertEqual(CotasRPVService.saldo_disponivel_competencia(origem), Decimal("0.00"))
+        self.assertEqual(CotasRPVService.saldo_disponivel_competencia(destino), Decimal("15000.00"))
+
+    def test_cotas_preservam_saldo_fechado_do_mes_anterior_ao_transferir(self):
+        situacao_se_aprovada = self._criar_situacao_empenho(
+            "SE Aprovada - Gerar NE",
+            ordem_fluxo=4,
+            is_final=False,
+        )
+        inicio_mes_atual = self._data_base_mes_atual()
+        competencia_atual = inicio_mes_atual.strftime("%Y-%m")
+        competencia_anterior = (inicio_mes_atual - timedelta(days=1)).strftime("%Y-%m")
+
+        CotasRPVService.registrar_aportes(
+            competencia=competencia_anterior,
+            valores_por_grupo={
+                "pessoal": Decimal("10000.00"),
+                "comum": Decimal("0.00"),
+                "pericial": Decimal("0.00"),
+            },
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        origem = CotaRPVCompetencia.query.filter_by(
+            competencia=competencia_anterior,
+            grupo_cota="pessoal",
+        ).first()
+        aporte = CotaRPVMovimento.query.filter_by(
+            cota_rpv_competencia_id=origem.id,
+            tipo_movimento=CotasRPVService.TIPO_APORTE_MANUAL,
+        ).first()
+        aporte.criado_em = datetime.combine(inicio_mes_atual, datetime.min.time()) - timedelta(
+            days=5
+        )
+
+        registro = self._criar_rpv(
+            nome_beneficiario="Reserva Fechada no Mes Anterior",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_bruto=Decimal("7991.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            exercicio=competencia_anterior,
+        )
+        registro.situacao_empenho = situacao_se_aprovada
+        registro.situacao_empenho_id = situacao_se_aprovada.id
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=self.user_id)
+        db.session.commit()
+
+        consumo_ativo = CotaRPVConsumo.query.filter_by(
+            origem_tipo="registro_rpv",
+            origem_id=registro.id,
+            ativo=True,
+        ).first()
+        consumo_ativo.consumido_em = datetime.combine(
+            inicio_mes_atual, datetime.min.time()
+        ) - timedelta(days=1)
+        db.session.commit()
+
+        registro.situacao_empenho_id = self.situacao_empenho_id
+        registro.situacao_empenho = db.session.get(SituacaoEmpenho, self.situacao_empenho_id)
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=self.user_id)
+        db.session.commit()
+
+        self.assertEqual(CotasRPVService.saldo_disponivel_competencia(origem), Decimal("10000.00"))
+
+        pendentes = CotasRPVService.listar_saldos_anteriores_pendentes(
+            competencia_destino=competencia_atual
+        )
+        saldo_origem = next(item for item in pendentes if item["bucket_id"] == origem.id)
+        self.assertEqual(saldo_origem["saldo_disponivel"], Decimal("2009.00"))
+
+        valor_transferido = CotasRPVService.transferir_saldo_integral(
+            origem_competencia_id=origem.id,
+            competencia_destino=competencia_atual,
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        self.assertEqual(valor_transferido, Decimal("2009.00"))
+        self.assertNotIn(
+            origem.id,
+            {
+                item["bucket_id"]
+                for item in CotasRPVService.listar_saldos_anteriores_pendentes(
+                    competencia_destino=competencia_atual
+                )
+            },
+        )
+
+    def test_cotas_mantem_saldo_no_mes_seguinte_apos_conciliacao_retroativa(self):
+        situacao_se_aprovada = self._criar_situacao_empenho(
+            "SE Aprovada - Gerar NE",
+            ordem_fluxo=4,
+            is_final=False,
+        )
+        inicio_mes_atual = self._data_base_mes_atual()
+        competencia_atual = inicio_mes_atual.strftime("%Y-%m")
+        competencia_anterior = (inicio_mes_atual - timedelta(days=1)).strftime("%Y-%m")
+
+        CotasRPVService.registrar_aportes(
+            competencia=competencia_anterior,
+            valores_por_grupo={
+                "pessoal": Decimal("0.00"),
+                "comum": Decimal("10000.00"),
+                "pericial": Decimal("0.00"),
+            },
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        origem = CotaRPVCompetencia.query.filter_by(
+            competencia=competencia_anterior,
+            grupo_cota="comum",
+        ).first()
+        aporte = CotaRPVMovimento.query.filter_by(
+            cota_rpv_competencia_id=origem.id,
+            tipo_movimento=CotasRPVService.TIPO_APORTE_MANUAL,
+        ).first()
+        aporte.criado_em = datetime.combine(inicio_mes_atual, datetime.min.time()) - timedelta(
+            days=5
+        )
+
+        registro = self._criar_rpv(
+            nome_beneficiario="Reserva Retroativa Ajustada",
+            tipo_rpv_id=self.tipo_honorarios_id,
+            valor_bruto=Decimal("7991.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            exercicio=competencia_anterior,
+        )
+        registro.situacao_empenho = situacao_se_aprovada
+        registro.situacao_empenho_id = situacao_se_aprovada.id
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=self.user_id)
+        db.session.commit()
+
+        consumo_ativo = CotaRPVConsumo.query.filter_by(
+            origem_tipo="registro_rpv",
+            origem_id=registro.id,
+            ativo=True,
+        ).first()
+        consumo_ativo.consumido_em = datetime.combine(
+            inicio_mes_atual, datetime.min.time()
+        ) - timedelta(days=1)
+        db.session.commit()
+
+        registro.situacao_empenho_id = self.situacao_empenho_id
+        registro.situacao_empenho = db.session.get(SituacaoEmpenho, self.situacao_empenho_id)
+        CotasRPVService.sincronizar_entidade(registro, usuario_id=self.user_id)
+        db.session.commit()
+
+        self.assertEqual(CotasRPVService.saldo_disponivel_competencia(origem), Decimal("10000.00"))
+
+        conciliacao = CotasRPVService.conciliar_saldo_oficial(
+            competencia=competencia_anterior,
+            grupo_cota="comum",
+            saldo_oficial_atual=Decimal("2009.00"),
+            usuario_id=self.user_id,
+            observacoes="Correcao retroativa do saldo fechado.",
+        )
+        db.session.commit()
+
+        self.assertEqual(conciliacao["delta_ajuste"], Decimal("-7991.00"))
+        self.assertEqual(CotasRPVService.saldo_disponivel_competencia(origem), Decimal("2009.00"))
+
+        pendentes = CotasRPVService.listar_saldos_anteriores_pendentes(
+            competencia_destino=competencia_atual
+        )
+        saldo_origem = next(item for item in pendentes if item["bucket_id"] == origem.id)
+        self.assertEqual(saldo_origem["saldo_disponivel"], Decimal("2009.00"))
+
+    def test_dashboard_exibe_cards_limpos_de_cota(self):
+        competencia_atual = CotasRPVService.competencia_atual()
+        competencia_anterior = "2026-04" if competencia_atual != "2026-04" else "2026-03"
+        CotasRPVService.registrar_aportes(
+            competencia=competencia_atual,
+            valores_por_grupo={
+                "pessoal": Decimal("90000.00"),
+                "comum": Decimal("45000.00"),
+                "pericial": Decimal("15000.00"),
+            },
+            usuario_id=self.user_id,
+        )
+        CotasRPVService.registrar_aportes(
+            competencia=competencia_anterior,
+            valores_por_grupo={
+                "pessoal": Decimal("0.00"),
+                "comum": Decimal("7000.00"),
+                "pericial": Decimal("0.00"),
+            },
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        resposta = self.client.get("/")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Cotas do mes", html)
+        self.assertIn("Saldo disponivel por ficha", html)
+        self.assertIn("Pessoal", html)
+        self.assertIn("Comum", html)
+        self.assertIn("Pericial", html)
+        self.assertIn("Com saldo anterior pendente", html)
+
+    def test_modulo_cotas_lanca_e_lista_movimentos(self):
+        competencia = CotasRPVService.competencia_atual()
+        resposta = self.client.post(
+            "/cotas-rpv/lancar",
+            data={
+                "competencia": competencia,
+                "valor_pessoal": "120000,00",
+                "valor_comum": "50000,00",
+                "valor_pericial": "18000,00",
+                "observacoes": "Cota operacional do mes",
+            },
+            follow_redirects=True,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Cota mensal registrada com sucesso.", html)
+        self.assertIn("Historico", html)
+        self.assertIn("Cotas do mes", html)
+        self.assertEqual(CotaRPVMovimento.query.count(), 3)
+        self.assertIsNotNone(
+            CotaRPVCompetencia.query.filter_by(
+                competencia=competencia,
+                grupo_cota="pessoal",
+            ).first()
+        )
+
+    def test_modulo_cotas_renderiza_csrf_e_campos_monetarios_com_mascara(self):
+        resposta = self.client.get("/cotas-rpv")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn('name="csrf_token"', html)
+        self.assertIn('data-currency-field', html)
+        self.assertIn("Digite só números.", html)
+        self.assertIn("data-cotas-total-preview", html)
+
+    def test_modulo_cotas_esconde_pagos_por_padrao_e_mostra_com_toggle(self):
+        situacao_se_aprovada = self._criar_situacao_empenho(
+            "SE Aprovada - Gerar NE",
+            ordem_fluxo=4,
+            is_final=False,
+        )
+        registro_aberto = self._criar_rpv(
+            nome_beneficiario="Reserva em aberto",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_bruto=Decimal("8000.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            exercicio="2026-05",
+        )
+        registro_pago = self._criar_rpv(
+            nome_beneficiario="Reserva ja paga",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_bruto=Decimal("9200.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            exercicio="2026-05",
+        )
+        registro_outra_competencia = self._criar_rpv(
+            nome_beneficiario="Reserva de outra competencia",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_bruto=Decimal("7300.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            exercicio="2026-04",
+        )
+
+        registro_aberto.situacao_empenho = situacao_se_aprovada
+        registro_aberto.situacao_empenho_id = situacao_se_aprovada.id
+        registro_pago.situacao_empenho = situacao_se_aprovada
+        registro_pago.situacao_empenho_id = situacao_se_aprovada.id
+        registro_pago.data_pagamento = date(2026, 5, 20)
+        registro_outra_competencia.situacao_empenho = situacao_se_aprovada
+        registro_outra_competencia.situacao_empenho_id = situacao_se_aprovada.id
+
+        CotasRPVService.sincronizar_entidade(registro_aberto, usuario_id=self.user_id)
+        CotasRPVService.sincronizar_entidade(registro_pago, usuario_id=self.user_id)
+        CotasRPVService.sincronizar_entidade(registro_outra_competencia, usuario_id=self.user_id)
+        db.session.commit()
+
+        resposta = self.client.get("/cotas-rpv?competencia=2026-05")
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Exibindo: Em aberto", html)
+        self.assertIn("Incluir pagos", html)
+        self.assertIn("Reserva em aberto", html)
+        self.assertNotIn("Reserva ja paga", html)
+        self.assertNotIn("Reserva de outra competencia", html)
+        self.assertIn("Mostrando 1 de 2 reservas desta competencia", html)
+
+        resposta_todos = self.client.get("/cotas-rpv?competencia=2026-05&incluir_pagos=1")
+        html_todos = resposta_todos.get_data(as_text=True)
+
+        self.assertEqual(resposta_todos.status_code, 200)
+        self.assertIn("Exibindo: Todos", html_todos)
+        self.assertIn("Ocultar pagos", html_todos)
+        self.assertIn("Reserva em aberto", html_todos)
+        self.assertIn("Reserva ja paga", html_todos)
+        self.assertNotIn("Reserva de outra competencia", html_todos)
+        self.assertIn("Mostrando 2 de 2 reservas desta competencia", html_todos)
+
+    def test_modulo_cotas_rejeita_texto_invalido_nos_valores(self):
+        competencia = CotasRPVService.competencia_atual()
+        resposta = self.client.post(
+            "/cotas-rpv/lancar",
+            data={
+                "competencia": competencia,
+                "valor_pessoal": "abc",
+                "valor_comum": "",
+                "valor_pericial": "",
+                "observacoes": "teste invalido",
+            },
+            follow_redirects=True,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Use apenas números nos valores de cota.", html)
+        self.assertEqual(CotaRPVMovimento.query.count(), 0)
+
+
+    def test_modulo_cotas_sinaliza_percentual_restante_em_40_e_30_por_cento(self):
+        situacao_se_aprovada = self._criar_situacao_empenho(
+            "SE Aprovada - Gerar NE",
+            ordem_fluxo=4,
+            is_final=False,
+        )
+        competencia = "2026-05"
+        CotasRPVService.registrar_aportes(
+            competencia=competencia,
+            valores_por_grupo={
+                "pessoal": Decimal("100000.00"),
+                "comum": Decimal("100000.00"),
+                "pericial": Decimal("0.00"),
+            },
+            usuario_id=self.user_id,
+        )
+
+        registro_pessoal = self._criar_rpv(
+            nome_beneficiario="RPV Cota 35",
+            tipo_rpv_id=self.tipo_pessoal_id,
+            valor_bruto=Decimal("65000.00"),
+            valor_irrf=None,
+            sem_irrf=True,
+            exercicio=competencia,
+        )
+        registro_pessoal.situacao_empenho = situacao_se_aprovada
+        registro_pessoal.situacao_empenho_id = situacao_se_aprovada.id
+        CotasRPVService.sincronizar_entidade(registro_pessoal, usuario_id=self.user_id)
+
+        _, lote_comum, _ = self._criar_dativo_sem_irrf(
+            processo_edoc="CI-COTA-25",
+            exercicio=competencia,
+            itens=[
+                {
+                    "nome_beneficiario": "Lote 25",
+                    "cpf_original": "11122233344",
+                    "numero_processo": "PROC-COTA-25",
+                    "valor_bruto": Decimal("75000.00"),
+                }
+            ],
+        )
+        lote_comum.situacao_rpv = situacao_se_aprovada
+        lote_comum.situacao_rpv_id = situacao_se_aprovada.id
+        CotasRPVService.sincronizar_entidade(lote_comum, usuario_id=self.user_id)
+        db.session.commit()
+
+        resumo = CotasRPVService.resumo_competencia(competencia=competencia)
+        grupos = {grupo["key"]: grupo for grupo in resumo["grupos"]}
+        self.assertEqual(grupos["pessoal"]["status"], "attention")
+        self.assertEqual(grupos["pessoal"]["status_visual_label"], "Sob alerta")
+        self.assertEqual(grupos["pessoal"]["percentual_restante_label"], "35,0% restante")
+        self.assertEqual(grupos["comum"]["status"], "critical")
+        self.assertEqual(grupos["comum"]["status_visual_label"], "Critico")
+        self.assertEqual(grupos["comum"]["percentual_restante_label"], "25,0% restante")
+
+        resposta = self.client.get(f"/cotas-rpv?competencia={competencia}")
+        html = resposta.get_data(as_text=True)
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Sob alerta", html)
+        self.assertIn("Critico", html)
+        self.assertNotIn(">35,0% restante<", html)
+        self.assertNotIn(">25,0% restante<", html)
+        self.assertIn("cota-summary-card is-attention", html)
+        self.assertIn("cota-summary-card is-critical", html)
+
+    def test_modulo_cotas_nao_marca_critico_quando_saldo_integral_do_mes_esta_preservado(self):
+        competencia = "2026-06"
+        CotasRPVService.registrar_aportes(
+            competencia=competencia,
+            valores_por_grupo={
+                "pessoal": Decimal("1.00"),
+                "comum": Decimal("1002009.00"),
+                "pericial": Decimal("1.00"),
+            },
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        medias_altas = {
+            "pessoal": Decimal("0.00"),
+            "comum": Decimal("2004018.00"),
+            "pericial": Decimal("0.00"),
+        }
+        with patch.object(
+            CotasRPVService,
+            "_medias_historicas_por_grupo",
+            return_value=medias_altas,
+        ):
+            resumo = CotasRPVService.resumo_competencia(competencia=competencia)
+            grupos = {grupo["key"]: grupo for grupo in resumo["grupos"]}
+            grupo_comum = grupos["comum"]
+
+            self.assertEqual(grupo_comum["saldo_disponivel"], Decimal("1002009.00"))
+            self.assertEqual(grupo_comum["valor_lancado"], Decimal("1002009.00"))
+            self.assertEqual(grupo_comum["percentual_restante_label"], "100,0% restante")
+            self.assertEqual(grupo_comum["cobertura_label"], "Cobre 0,5 mes medio(s)")
+            self.assertEqual(grupo_comum["status"], "ok")
+            self.assertEqual(grupo_comum["status_visual_label"], "Estavel")
+
+            resposta = self.client.get(f"/cotas-rpv?competencia={competencia}")
+            html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("Ficha Comum", html)
+        self.assertIn("Estavel", html)
+        self.assertIn("Cobre 0,5 mes medio(s)", html)
+        self.assertNotIn("cota-summary-card is-critical", html)
+
+    def test_modulo_cotas_concilia_saldo_oficial_com_ajuste_negativo(self):
+        competencia = "2026-05"
+        CotasRPVService.registrar_aportes(
+            competencia=competencia,
+            valores_por_grupo={
+                "pessoal": Decimal("0.00"),
+                "comum": Decimal("50000.00"),
+                "pericial": Decimal("0.00"),
+            },
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        resposta = self.client.post(
+            "/cotas-rpv/conciliar",
+            data={
+                "competencia": competencia,
+                "grupo_cota": "comum",
+                "saldo_oficial_atual": "32000,00",
+                "observacoes": "Saldo oficial conferido no sistema interno.",
+            },
+            follow_redirects=True,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("conciliado com sucesso", html.lower())
+        self.assertIn("Conciliacao manual do saldo", html)
+
+        bucket = CotaRPVCompetencia.query.filter_by(
+            competencia=competencia,
+            grupo_cota="comum",
+        ).first()
+        self.assertIsNotNone(bucket)
+        self.assertEqual(CotasRPVService.saldo_disponivel_competencia(bucket), Decimal("32000.00"))
+
+        ajuste = (
+            CotaRPVMovimento.query.filter_by(
+                cota_rpv_competencia_id=bucket.id,
+                tipo_movimento=CotasRPVService.TIPO_AJUSTE_MANUAL,
+            )
+            .order_by(CotaRPVMovimento.id.desc())
+            .first()
+        )
+        self.assertIsNotNone(ajuste)
+        self.assertEqual(Decimal(ajuste.valor), Decimal("-18000.00"))
+
+    def test_modulo_cotas_exige_justificativa_para_conciliacao_manual(self):
+        competencia = "2026-05"
+        CotasRPVService.registrar_aportes(
+            competencia=competencia,
+            valores_por_grupo={
+                "pessoal": Decimal("0.00"),
+                "comum": Decimal("10000.00"),
+                "pericial": Decimal("0.00"),
+            },
+            usuario_id=self.user_id,
+        )
+        db.session.commit()
+
+        resposta = self.client.post(
+            "/cotas-rpv/conciliar",
+            data={
+                "competencia": competencia,
+                "grupo_cota": "comum",
+                "saldo_oficial_atual": "8000,00",
+                "observacoes": "",
+            },
+            follow_redirects=True,
+        )
+        html = resposta.get_data(as_text=True)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("justificativa da conciliacao manual", html.lower())
+        self.assertEqual(
+            CotaRPVMovimento.query.filter_by(
+                tipo_movimento=CotasRPVService.TIPO_AJUSTE_MANUAL
+            ).count(),
+            0,
+        )
+
 
 
 if __name__ == "__main__":

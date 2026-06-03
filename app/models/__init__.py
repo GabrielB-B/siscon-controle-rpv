@@ -10,3 +10,6 @@ from app.models.dativo_lote import DativoLote
 from app.models.dativo_item import DativoItem
 from app.models.historico_alteracao import HistoricoAlteracao
 from app.models.password_reset_token import PasswordResetToken
+from app.models.cota_rpv_competencia import CotaRPVCompetencia
+from app.models.cota_rpv_movimento import CotaRPVMovimento
+from app.models.cota_rpv_consumo import CotaRPVConsumo

@@ -24,6 +24,10 @@ MESES_ABREV = {
 
 class RegistroRPV(db.Model):
     __tablename__ = "registros_rpv"
+    __table_args__ = (
+        db.Index("ix_registros_rpv_data_pagamento", "data_pagamento"),
+        db.Index("ix_registros_rpv_elaborador_data_pagamento", "elaborador_id", "data_pagamento"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
 

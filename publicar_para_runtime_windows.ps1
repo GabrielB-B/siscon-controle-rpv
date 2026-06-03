@@ -2,6 +2,7 @@
 param(
     [string]$RuntimePath = "",
     [switch]$SkipRequirementsInstall,
+    [switch]$InitializeRuntimeEnvironment,
     [switch]$ForceSeedStateFromSource
 )
 
@@ -27,48 +28,69 @@ function Assert-RobocopySuccess {
     }
 }
 
-function Copy-ItemIfMissingOrForced {
+function Get-PortableRelativePath {
     param(
-        [string]$SourcePath,
-        [string]$DestinationPath,
-        [switch]$Recurse,
-        [switch]$ForceMode
+        [string]$BasePath,
+        [string]$TargetPath
     )
 
-    if (-not (Test-Path $SourcePath)) {
-        return $false
+    $baseFullPath = [System.IO.Path]::GetFullPath($BasePath)
+    $targetFullPath = [System.IO.Path]::GetFullPath($TargetPath)
+
+    if (-not $baseFullPath.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $baseFullPath += [System.IO.Path]::DirectorySeparatorChar
     }
 
-    if ((Test-Path $DestinationPath) -and -not $ForceMode) {
-        return $false
-    }
+    $baseUri = New-Object System.Uri($baseFullPath)
+    $targetUri = New-Object System.Uri($targetFullPath)
+    return [System.Uri]::UnescapeDataString($baseUri.MakeRelativeUri($targetUri).ToString()).Replace("/", "\")
+}
 
-    $destinationParent = Split-Path -Parent $DestinationPath
-    if ($destinationParent) {
-        New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
-    }
+function Ensure-RuntimeScaffold {
+    param([string]$RuntimePath)
 
-    if ((Test-Path $DestinationPath) -and $ForceMode) {
-        Remove-Item -LiteralPath $DestinationPath -Recurse:$Recurse -Force
-    }
+    $paths = @(
+        $RuntimePath,
+        (Join-Path $RuntimePath "instance"),
+        (Join-Path $RuntimePath "instance\backups"),
+        (Join-Path $RuntimePath "instance\certs"),
+        (Join-Path $RuntimePath "instance\import_previews"),
+        (Join-Path $RuntimePath "instance\logs"),
+        (Join-Path $RuntimePath "instance\notifications"),
+        (Join-Path $RuntimePath "backups")
+    )
 
-    Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Recurse:$Recurse
-    return $true
+    foreach ($path in $paths) {
+        New-Item -ItemType Directory -Path $path -Force | Out-Null
+    }
 }
 
 function Get-SourceTreeMetadata {
     param([string]$SourcePath)
 
     $metadata = [ordered]@{
-        git_commit = ""
-        git_branch = ""
-        git_dirty  = $null
+        git_available     = $false
+        git_commit_short  = ""
+        git_commit_full   = ""
+        git_branch        = ""
+        git_dirty         = $null
+        git_dirty_files   = @()
     }
 
     try {
-        $commit = (& git -C $SourcePath rev-parse --short HEAD 2>$null | Out-String).Trim()
-        if ($LASTEXITCODE -eq 0) {
-            $metadata.git_commit = $commit
+        $commitFull = (& git -C $SourcePath rev-parse HEAD 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $commitFull) {
+            $metadata.git_available = $true
+            $metadata.git_commit_full = $commitFull
+        }
+    }
+    catch {}
+
+    try {
+        $commitShort = (& git -C $SourcePath rev-parse --short HEAD 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $commitShort) {
+            $metadata.git_available = $true
+            $metadata.git_commit_short = $commitShort
         }
     }
     catch {}
@@ -76,15 +98,25 @@ function Get-SourceTreeMetadata {
     try {
         $branch = (& git -C $SourcePath branch --show-current 2>$null | Out-String).Trim()
         if ($LASTEXITCODE -eq 0) {
+            $metadata.git_available = $true
             $metadata.git_branch = $branch
         }
     }
     catch {}
 
     try {
-        $status = (& git -C $SourcePath status --short 2>$null | Out-String).Trim()
+        $statusOutput = (& git -C $SourcePath status --short 2>$null | Out-String)
         if ($LASTEXITCODE -eq 0) {
+            $metadata.git_available = $true
+            $status = $statusOutput.Trim()
             $metadata.git_dirty = -not [string]::IsNullOrWhiteSpace($status)
+            if ($metadata.git_dirty) {
+                $metadata.git_dirty_files = @(
+                    $status -split "`r?`n" |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                        ForEach-Object { $_.TrimEnd() }
+                )
+            }
         }
     }
     catch {}
@@ -114,38 +146,6 @@ function Get-SuspiciousSourceArtifacts {
         ForEach-Object { $artifacts.Add($_.FullName) }
 
     return $artifacts.ToArray()
-}
-
-function Copy-SqliteDbConsistently {
-    param(
-        [string]$PythonExe,
-        [string]$SourceDbPath,
-        [string]$DestinationDbPath
-    )
-
-    if (-not (Test-Path $PythonExe)) {
-        throw "Python nao encontrado para copiar o banco SQLite com seguranca."
-    }
-
-    $destinationParent = Split-Path -Parent $DestinationDbPath
-    if ($destinationParent) {
-        New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
-    }
-
-    $copyScript = @'
-import sqlite3
-import sys
-
-source_db, destination_db = sys.argv[1], sys.argv[2]
-with sqlite3.connect(source_db) as source:
-    with sqlite3.connect(destination_db) as destination:
-        source.backup(destination)
-'@
-
-    & $PythonExe -c $copyScript $SourceDbPath $DestinationDbPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Falha ao copiar o banco SQLite para a runtime."
-    }
 }
 
 function Remove-ExplicitRuntimeArtifacts {
@@ -197,6 +197,111 @@ function Remove-ExplicitRuntimeArtifacts {
     return $removedTargets.ToArray()
 }
 
+function Get-RuntimeStateWarnings {
+    param(
+        [string]$RuntimePath,
+        [string]$RuntimeDbPath
+    )
+
+    $warnings = New-Object System.Collections.Generic.List[string]
+    $rootDbPath = Join-Path $RuntimePath "controle_rpv.db"
+
+    if (Test-Path $rootDbPath) {
+        $rootFullPath = [System.IO.Path]::GetFullPath($rootDbPath)
+        $runtimeFullPath = [System.IO.Path]::GetFullPath($RuntimeDbPath)
+        if ($rootFullPath -ne $runtimeFullPath) {
+            $warnings.Add(
+                "Banco SQLite na raiz da runtime detectado em $rootFullPath. Revise e coloque em quarentena manual antes da proxima publicacao."
+            )
+        }
+    }
+
+    return $warnings.ToArray()
+}
+
+function Test-ShouldFingerprintFile {
+    param(
+        [System.IO.FileInfo]$File,
+        [string]$BasePath
+    )
+
+    $relativePath = Get-PortableRelativePath -BasePath $BasePath -TargetPath $File.FullName
+    $segments = $relativePath -split "[\\/]"
+    $excludedSegmentNames = @(
+        ".git",
+        ".venv",
+        "instance",
+        "backups",
+        ".pytest_cache",
+        ".vscode",
+        ".idea",
+        "entrada",
+        "saida",
+        "__pycache__",
+        "tests",
+        "docs",
+        "htmlcov",
+        ".mypy_cache",
+        ".ruff_cache"
+    )
+
+    foreach ($segment in $segments) {
+        if ($excludedSegmentNames -contains $segment) {
+            return $false
+        }
+    }
+
+    $excludedFilePatterns = @(
+        "*.db",
+        "*.sqlite",
+        "*.sqlite3",
+        "*.log",
+        "*.xlsx",
+        "*.xls",
+        "*.pdf",
+        ".coverage*",
+        "coverage.xml"
+    )
+
+    foreach ($pattern in $excludedFilePatterns) {
+        if ($File.Name -like $pattern) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Get-CodeFingerprint {
+    param([string]$TargetPath)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+
+    Get-ChildItem -LiteralPath $TargetPath -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Where-Object { Test-ShouldFingerprintFile -File $_ -BasePath $TargetPath } |
+        Sort-Object { (Get-PortableRelativePath -BasePath $TargetPath -TargetPath $_.FullName).Replace("\", "/") } |
+        ForEach-Object {
+            $relativePath = (Get-PortableRelativePath -BasePath $TargetPath -TargetPath $_.FullName).Replace("\", "/")
+            $fileHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            $lines.Add("$relativePath|$fileHash")
+        }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $joined = $lines -join "`n"
+        $hashBytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($joined))
+    }
+    finally {
+        $sha.Dispose()
+    }
+
+    return [ordered]@{
+        algorithm  = "sha256"
+        file_count = $lines.Count
+        fingerprint = ([System.BitConverter]::ToString($hashBytes)).Replace("-", "").ToLowerInvariant()
+    }
+}
+
 function Write-PublishManifest {
     param(
         [string]$ManifestPath,
@@ -204,23 +309,34 @@ function Write-PublishManifest {
         [string]$RuntimePath,
         [hashtable]$SourceTreeMetadata,
         [bool]$SkipRequirementsInstall,
-        [bool]$ForceSeedStateFromSource,
+        [bool]$InitializeRuntimeEnvironment,
         [string[]]$ExcludedDirectories,
         [string[]]$ExcludedFiles,
         [string[]]$SuspiciousArtifacts,
         [string[]]$RemovedRuntimeArtifacts,
-        [string[]]$StateMessages
+        [string[]]$StateMessages,
+        [hashtable]$CodeFingerprint,
+        [bool]$RuntimeEnvPresent,
+        [bool]$RuntimeDatabasePresent
     )
 
     $manifest = [ordered]@{
         published_at                  = (Get-Date).ToString("s")
+        publish_mode                  = if ($InitializeRuntimeEnvironment) { "initialize_runtime_environment" } else { "code_only_publish" }
+        publish_policy                = "codigo_apenas_sem_copiar_banco_sem_copiar_env_dev_sem_semeadura_de_estado"
         source_path                   = $SourcePath
         runtime_path                  = $RuntimePath
-        git_commit                    = $SourceTreeMetadata.git_commit
+        git_available                 = $SourceTreeMetadata.git_available
+        git_commit_short              = $SourceTreeMetadata.git_commit_short
+        git_commit_full               = $SourceTreeMetadata.git_commit_full
         git_branch                    = $SourceTreeMetadata.git_branch
         git_dirty                     = $SourceTreeMetadata.git_dirty
+        git_dirty_files               = $SourceTreeMetadata.git_dirty_files
         skip_requirements_install     = $SkipRequirementsInstall
-        force_seed_state_from_source  = $ForceSeedStateFromSource
+        initialize_runtime_environment = $InitializeRuntimeEnvironment
+        runtime_env_present           = $RuntimeEnvPresent
+        runtime_database_present      = $RuntimeDatabasePresent
+        runtime_code_fingerprint      = $CodeFingerprint
         excluded_directories          = $ExcludedDirectories
         excluded_files                = $ExcludedFiles
         suspicious_source_artifacts   = $SuspiciousArtifacts
@@ -241,24 +357,30 @@ if (-not $RuntimePath) {
     $RuntimePath = Get-DefaultRuntimePath -SourcePath $sourcePath
 }
 
+if ($ForceSeedStateFromSource) {
+    throw (
+        "A flag -ForceSeedStateFromSource foi bloqueada por seguranca. " +
+        "Use backup, restauracao controlada e checkpoint explicito para qualquer recuperacao especial de banco."
+    )
+}
+
 $RuntimePath = [System.IO.Path]::GetFullPath($RuntimePath)
 $sourcePython = Join-Path $sourcePath ".venv\Scripts\python.exe"
 $runtimePython = Join-Path $RuntimePath ".venv\Scripts\python.exe"
 $runtimeEnv = Join-Path $RuntimePath ".env"
-$sourceEnv = Join-Path $sourcePath ".env"
 $runtimeEnvExample = Join-Path $RuntimePath ".env.example"
-$sourceInstancePath = Join-Path $sourcePath "instance"
 $runtimeInstancePath = Join-Path $RuntimePath "instance"
-$sourceDbPath = Join-Path $sourceInstancePath "controle_rpv.db"
 $runtimeDbPath = Join-Path $runtimeInstancePath "controle_rpv.db"
 $sourceTreeMetadata = Get-SourceTreeMetadata -SourcePath $sourcePath
 $suspiciousSourceArtifacts = Get-SuspiciousSourceArtifacts -SourcePath $sourcePath
+$runtimeExisted = Test-Path $RuntimePath
+$stateMessages = @()
 
 Write-Host "Origem (dev): $sourcePath" -ForegroundColor Cyan
 Write-Host "Destino (runtime): $RuntimePath" -ForegroundColor Cyan
 
-if ($sourceTreeMetadata.git_commit) {
-    Write-Host "Commit atual: $($sourceTreeMetadata.git_commit)" -ForegroundColor Cyan
+if ($sourceTreeMetadata.git_commit_short) {
+    Write-Host "Commit atual: $($sourceTreeMetadata.git_commit_short)" -ForegroundColor Cyan
 }
 if ($sourceTreeMetadata.git_branch) {
     Write-Host "Branch atual: $($sourceTreeMetadata.git_branch)" -ForegroundColor Cyan
@@ -267,6 +389,12 @@ if ($null -ne $sourceTreeMetadata.git_dirty) {
     $dirtyLabel = if ($sourceTreeMetadata.git_dirty) { "sim" } else { "nao" }
     Write-Host "Worktree com mudancas locais: $dirtyLabel" -ForegroundColor Cyan
 }
+if ($sourceTreeMetadata.git_dirty_files.Count -gt 0) {
+    Write-Host "Arquivos locais nao commitados detectados:" -ForegroundColor Yellow
+    foreach ($dirtyFile in $sourceTreeMetadata.git_dirty_files) {
+        Write-Host "- $dirtyFile" -ForegroundColor Yellow
+    }
+}
 if ($suspiciousSourceArtifacts.Count -gt 0) {
     Write-Host "Artefatos locais nao operacionais detectados na dev e ignorados na publicacao:" -ForegroundColor Yellow
     foreach ($artifactPath in $suspiciousSourceArtifacts) {
@@ -274,9 +402,34 @@ if ($suspiciousSourceArtifacts.Count -gt 0) {
     }
 }
 
-New-Item -ItemType Directory -Path $RuntimePath -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $RuntimePath "instance") -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $RuntimePath "backups") -Force | Out-Null
+if (-not $runtimeExisted -and -not $InitializeRuntimeEnvironment) {
+    throw (
+        "A pasta runtime ainda nao existe em $RuntimePath. " +
+        "Use .\\inicializar_runtime_ambiente_windows.ps1 para preparar a runtime pela primeira vez."
+    )
+}
+
+if (-not $runtimeExisted -and $InitializeRuntimeEnvironment) {
+    Write-Host "Inicializando scaffold seguro da runtime..." -ForegroundColor Cyan
+    $stateMessages += "Scaffold inicial da runtime criado sem copiar banco, .env da dev ou estado sensivel."
+}
+
+Ensure-RuntimeScaffold -RuntimePath $RuntimePath
+
+if ((-not $InitializeRuntimeEnvironment) -and (-not (Test-Path $runtimeEnv))) {
+    throw (
+        "Arquivo .env da runtime ausente em $runtimeEnv. " +
+        "Restaure o .env a partir de backup ou rode .\\inicializar_runtime_ambiente_windows.ps1 para um bootstrap controlado."
+    )
+}
+
+if ((-not $InitializeRuntimeEnvironment) -and (-not (Test-Path $runtimeDbPath))) {
+    throw (
+        "Banco da runtime ausente em $runtimeDbPath. " +
+        "A publicacao de codigo foi interrompida para nao semear banco da dev. " +
+        "Restaure o banco por backup antes de publicar."
+    )
+}
 
 $excludedDirectories = @(
     ".git",
@@ -322,7 +475,6 @@ $robocopyArgs = @(
     $excludedFiles
 )
 
-$stateMessages = @()
 foreach ($artifactPath in $suspiciousSourceArtifacts) {
     $stateMessages += "Artefato local ignorado na publicacao: $artifactPath"
 }
@@ -337,64 +489,38 @@ foreach ($removedTarget in $removedRuntimeArtifacts) {
 }
 
 if (-not (Test-Path $runtimeEnv)) {
-    if (Test-Path $sourceEnv) {
-        Copy-Item -LiteralPath $sourceEnv -Destination $runtimeEnv
-        Write-Host "Arquivo .env inicial copiado da pasta dev para a runtime." -ForegroundColor Yellow
+    if (-not $InitializeRuntimeEnvironment) {
+        throw "Arquivo .env da runtime continua ausente apos a publicacao."
     }
-    elseif (Test-Path $runtimeEnvExample) {
-        Copy-Item -LiteralPath $runtimeEnvExample -Destination $runtimeEnv
-        Write-Host "Arquivo .env inicial criado a partir de .env.example na runtime." -ForegroundColor Yellow
+
+    if (-not (Test-Path $runtimeEnvExample)) {
+        throw (
+            "Nao foi possivel criar o .env inicial da runtime porque .env.example nao existe em $runtimeEnvExample."
+        )
     }
-    else {
-        Write-Host "A runtime ainda nao tem .env. Ajuste esse arquivo antes de subir o sistema." -ForegroundColor Yellow
-    }
+
+    Copy-Item -LiteralPath $runtimeEnvExample -Destination $runtimeEnv
+    Write-Host "Arquivo .env inicial criado a partir de .env.example na runtime." -ForegroundColor Yellow
+    $stateMessages += "Arquivo .env inicial criado a partir de .env.example. Revise manualmente antes de subir a runtime."
 }
 else {
     Write-Host "Arquivo .env da runtime preservado." -ForegroundColor Green
 }
 
-if ((Test-Path $sourceDbPath) -and ((-not (Test-Path $runtimeDbPath)) -or $ForceSeedStateFromSource)) {
-    if ($ForceSeedStateFromSource -and (Test-Path $runtimeDbPath)) {
-        Write-Host "Sobrescrevendo o banco da runtime com o estado atual da pasta dev." -ForegroundColor Yellow
-    }
-
-    Copy-SqliteDbConsistently -PythonExe $sourcePython -SourceDbPath $sourceDbPath -DestinationDbPath $runtimeDbPath
-    $stateMessages += "Banco SQLite da runtime sincronizado a partir da pasta dev."
+if (Test-Path $runtimeDbPath) {
+    Write-Host "Banco da runtime preservado." -ForegroundColor Green
+}
+elseif ($InitializeRuntimeEnvironment) {
+    Write-Host "Banco da runtime nao foi criado automaticamente." -ForegroundColor Yellow
+    $stateMessages += "Banco da runtime permanece ausente. Aplique migrations conscientemente antes da primeira subida."
+}
+else {
+    throw "Banco da runtime ausente apos a publicacao."
 }
 
-$copyTargets = @(
-    @{
-        Source = Join-Path $sourceInstancePath "admin_bootstrap_password.txt"
-        Destination = Join-Path $runtimeInstancePath "admin_bootstrap_password.txt"
-        Recurse = $false
-    },
-    @{
-        Source = Join-Path $sourceInstancePath "certs"
-        Destination = Join-Path $runtimeInstancePath "certs"
-        Recurse = $true
-    },
-    @{
-        Source = Join-Path $sourceInstancePath "notifications"
-        Destination = Join-Path $runtimeInstancePath "notifications"
-        Recurse = $true
-    },
-    @{
-        Source = Join-Path $sourceInstancePath "import_previews"
-        Destination = Join-Path $runtimeInstancePath "import_previews"
-        Recurse = $true
-    }
-)
-
-foreach ($copyTarget in $copyTargets) {
-    $copied = Copy-ItemIfMissingOrForced `
-        -SourcePath $copyTarget.Source `
-        -DestinationPath $copyTarget.Destination `
-        -Recurse:$copyTarget.Recurse `
-        -ForceMode:$ForceSeedStateFromSource
-
-    if ($copied) {
-        $stateMessages += "Estado runtime atualizado: $($copyTarget.Destination)"
-    }
+foreach ($warning in (Get-RuntimeStateWarnings -RuntimePath $RuntimePath -RuntimeDbPath $runtimeDbPath)) {
+    Write-Host $warning -ForegroundColor Yellow
+    $stateMessages += $warning
 }
 
 if (-not (Test-Path $runtimePython)) {
@@ -433,6 +559,7 @@ $manifestTimestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
 $manifestDir = Join-Path $RuntimePath "backups"
 $timestampedManifestPath = Join-Path $manifestDir ("publish_manifest_{0}.json" -f $manifestTimestamp)
 $latestManifestPath = Join-Path $manifestDir "last_publish_manifest.json"
+$codeFingerprint = Get-CodeFingerprint -TargetPath $RuntimePath
 
 Write-PublishManifest `
     -ManifestPath $timestampedManifestPath `
@@ -440,12 +567,15 @@ Write-PublishManifest `
     -RuntimePath $RuntimePath `
     -SourceTreeMetadata $sourceTreeMetadata `
     -SkipRequirementsInstall ([bool]$SkipRequirementsInstall) `
-    -ForceSeedStateFromSource ([bool]$ForceSeedStateFromSource) `
+    -InitializeRuntimeEnvironment ([bool]$InitializeRuntimeEnvironment) `
     -ExcludedDirectories $excludedDirectories `
     -ExcludedFiles $excludedFiles `
     -SuspiciousArtifacts $suspiciousSourceArtifacts `
     -RemovedRuntimeArtifacts $removedRuntimeArtifacts `
-    -StateMessages $stateMessages
+    -StateMessages $stateMessages `
+    -CodeFingerprint $codeFingerprint `
+    -RuntimeEnvPresent ([bool](Test-Path $runtimeEnv)) `
+    -RuntimeDatabasePresent ([bool](Test-Path $runtimeDbPath))
 
 Write-PublishManifest `
     -ManifestPath $latestManifestPath `
@@ -453,26 +583,38 @@ Write-PublishManifest `
     -RuntimePath $RuntimePath `
     -SourceTreeMetadata $sourceTreeMetadata `
     -SkipRequirementsInstall ([bool]$SkipRequirementsInstall) `
-    -ForceSeedStateFromSource ([bool]$ForceSeedStateFromSource) `
+    -InitializeRuntimeEnvironment ([bool]$InitializeRuntimeEnvironment) `
     -ExcludedDirectories $excludedDirectories `
     -ExcludedFiles $excludedFiles `
     -SuspiciousArtifacts $suspiciousSourceArtifacts `
     -RemovedRuntimeArtifacts $removedRuntimeArtifacts `
-    -StateMessages $stateMessages
+    -StateMessages $stateMessages `
+    -CodeFingerprint $codeFingerprint `
+    -RuntimeEnvPresent ([bool](Test-Path $runtimeEnv)) `
+    -RuntimeDatabasePresent ([bool](Test-Path $runtimeDbPath))
 
 Write-Host ""
 Write-Host "Runtime preparada com sucesso." -ForegroundColor Green
+Write-Host "Modo: $(if ($InitializeRuntimeEnvironment) { 'bootstrap seguro' } else { 'publicacao de codigo' })" -ForegroundColor Green
 Write-Host "Pasta runtime: $RuntimePath" -ForegroundColor Green
 Write-Host "Manifesto da publicacao: $timestampedManifestPath" -ForegroundColor Green
+Write-Host "Fingerprint do codigo publicado: $($codeFingerprint.fingerprint)" -ForegroundColor Green
 if ($stateMessages.Count -gt 0) {
-    Write-Host "Estado inicial da runtime:" -ForegroundColor Cyan
+    Write-Host "Estado da runtime:" -ForegroundColor Cyan
     foreach ($message in $stateMessages) {
         Write-Host "- $message"
     }
 }
 Write-Host ""
 Write-Host "Proximos passos sugeridos:" -ForegroundColor Cyan
-Write-Host "1. Revise o .env em: $runtimeEnv"
-Write-Host "2. Gere backup na runtime antes de publicar alteracoes futuras."
-Write-Host "3. Para instalar o servico do Windows, rode:" 
-Write-Host "   .\instalar_servico_runtime_windows.ps1 -RuntimePath `"$RuntimePath`" -ServerIp SEU_IP"
+if ($InitializeRuntimeEnvironment) {
+    Write-Host "1. Revise o .env em: $runtimeEnv"
+    Write-Host "2. Aplique migrations conscientemente: .\aplicar_migrations_runtime_windows.ps1"
+    Write-Host "3. Para instalar o servico do Windows, rode:"
+    Write-Host "   .\instalar_servico_runtime_windows.ps1 -RuntimePath `"$RuntimePath`" -ServerIp SEU_IP"
+}
+else {
+    Write-Host "1. Confirme backup recente do banco da runtime."
+    Write-Host "2. Se houver migration aprovada, aplique conscientemente: .\aplicar_migrations_runtime_windows.ps1"
+    Write-Host "3. Reinicie a tarefa/servico da runtime de forma controlada."
+}

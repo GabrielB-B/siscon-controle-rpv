@@ -27,6 +27,8 @@ class DativoItem(db.Model):
             "cpf_normalizado",
             "numero_processo",
         ),
+        db.Index("ix_dativos_itens_data_pagamento", "data_pagamento"),
+        db.Index("ix_dativos_itens_grupo_data_pagamento", "grupo", "data_pagamento"),
     )
 
     id = db.Column(db.Integer, primary_key=True)
@@ -34,7 +36,7 @@ class DativoItem(db.Model):
     dativo_ci_id = db.Column(db.Integer, db.ForeignKey("dativos_ci.id"), nullable=False, index=True)
     dativo_lote_id = db.Column(db.Integer, db.ForeignKey("dativos_lotes.id"), nullable=True, index=True)
 
-    grupo = db.Column(db.String(20), nullable=False, index=True)
+    grupo = db.Column(db.String(20), nullable=False)
 
     nome_beneficiario = db.Column(db.String(200), nullable=False)
     nome_beneficiario_normalizado = db.Column(db.String(200), nullable=False, index=True)

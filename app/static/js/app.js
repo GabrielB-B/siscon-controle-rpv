@@ -566,6 +566,120 @@ function bindPhoneMask() {
     });
 }
 
+function normalizeCurrencyDigits(value, maxDigits = 14) {
+    const digits = String(value || "").replace(/\D/g, "");
+    const limit = Number.isFinite(Number(maxDigits)) ? Number(maxDigits) : 14;
+    return digits.slice(0, limit > 0 ? limit : 14);
+}
+
+function formatCurrencyValue(value, maxDigits = 14) {
+    const digits = normalizeCurrencyDigits(value, maxDigits);
+    if (!digits) {
+        return "";
+    }
+
+    const padded = digits.padStart(3, "0");
+    const integerDigits = padded.slice(0, -2).replace(/^0+(?=\d)/, "") || "0";
+    const decimalDigits = padded.slice(-2);
+    const integerFormatted = integerDigits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+
+    return `${integerFormatted},${decimalDigits}`;
+}
+
+function currencyDigitsToNumber(value, maxDigits = 14) {
+    const digits = normalizeCurrencyDigits(value, maxDigits);
+    if (!digits) {
+        return 0;
+    }
+
+    return Number(digits) / 100;
+}
+
+function formatCurrencyPreview(value) {
+    try {
+        return new Intl.NumberFormat("pt-BR", {
+            style: "currency",
+            currency: "BRL",
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(Number(value || 0));
+    } catch (error) {
+        return "R$ 0,00";
+    }
+}
+
+function bindCurrencyMask() {
+    document.querySelectorAll("[data-currency-field]").forEach((field) => {
+        const maxDigits = Number(field.getAttribute("data-currency-max-digits") || "14");
+
+        const applyMask = () => {
+            field.value = formatCurrencyValue(field.value, maxDigits);
+        };
+
+        const blockInvalidKeys = (event) => {
+            const allowedKeys = new Set([
+                "Backspace",
+                "Delete",
+                "Tab",
+                "Enter",
+                "Escape",
+                "ArrowLeft",
+                "ArrowRight",
+                "ArrowUp",
+                "ArrowDown",
+                "Home",
+                "End",
+            ]);
+
+            if (
+                allowedKeys.has(event.key)
+                || event.ctrlKey
+                || event.metaKey
+            ) {
+                return;
+            }
+
+            if (!/^\d$/.test(event.key)) {
+                event.preventDefault();
+            }
+        };
+
+        applyMask();
+        field.addEventListener("keydown", blockInvalidKeys);
+        field.addEventListener("input", applyMask);
+        field.addEventListener("blur", applyMask);
+    });
+}
+
+function bindCotasLaunchPreview() {
+    const form = document.querySelector("[data-cotas-launch-form]");
+    if (!form) {
+        return;
+    }
+
+    const totalElement = form.querySelector("[data-cotas-total-preview]");
+    const fields = Array.from(form.querySelectorAll("[data-currency-field]"));
+    if (!totalElement || !fields.length) {
+        return;
+    }
+
+    const refreshTotal = () => {
+        const total = fields.reduce((accumulator, field) => {
+            const maxDigits = Number(field.getAttribute("data-currency-max-digits") || "14");
+            return accumulator + currencyDigitsToNumber(field.value, maxDigits);
+        }, 0);
+
+        totalElement.textContent = formatCurrencyPreview(total);
+    };
+
+    refreshTotal();
+    fields.forEach((field) => {
+        field.addEventListener("input", refreshTotal);
+        field.addEventListener("change", refreshTotal);
+        field.addEventListener("blur", refreshTotal);
+    });
+}
+
 function escapeHtml(value) {
     return String(value ?? "")
         .replace(/&/g, "&amp;")
@@ -1620,6 +1734,8 @@ window.addEventListener("DOMContentLoaded", () => {
     bindDateFieldPickers();
     bindViewPresets();
     bindPhoneMask();
+    bindCurrencyMask();
+    bindCotasLaunchPreview();
     bindIrrfCalculators();
     bindSavedFilters();
     bindFormDrafts();
