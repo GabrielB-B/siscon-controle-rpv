@@ -1,39 +1,66 @@
 # SISCON Controle de RPVs
 
-Aplicacao web Flask para controle operacional e financeiro de RPVs, dativos, cotas mensais, REINF e BI operacional.
+Aplicacao web Flask para controle operacional e financeiro de `RPVs`, `dativos`, `cotas mensais`, `REINF` e `BI operacional`.
 
-Esta pasta e o espelho publico do sistema, preparada para portfolio tecnico. O objetivo aqui e demonstrar arquitetura, qualidade de codigo, organizacao de produto e disciplina operacional sem expor banco real, planilhas, backups, certificados, segredos ou documentos internos.
+Este repositorio e a camada publica e sanitizada do produto. Ele foi preparado para portfolio tecnico, demonstrando arquitetura, qualidade de codigo, organizacao de produto e disciplina operacional sem expor banco real, planilhas, backups, certificados, segredos ou documentos internos.
+
+## Visao geral
+
+O sistema nasceu para substituir controles dispersos em planilhas e verificacoes manuais por uma aplicacao com:
+
+- rastreabilidade de alteracoes
+- validacao de regras de negocio
+- leitura gerencial por modulo
+- separacao segura entre codigo e dados sensiveis
 
 ## O que este repositorio demonstra
 
-- Monolito modular em Flask com crescimento controlado.
-- Dominio real de RPVs, dativos, cotas, REINF e BI.
-- Separacao entre `routes`, `services`, `models`, `templates` e `tests`.
-- Evolucao de schema via Alembic.
-- Regras financeiras e fiscais com `Decimal`.
-- Auditoria de alteracoes sensiveis.
-- Healthcheck operacional e observabilidade local.
-- Scripts Windows para execucao, backup e publicacao segura.
-- Suite automatizada com `268` testes passando na sincronizacao desta copia.
+- monolito modular em Flask com crescimento controlado
+- dominio real de `RPVs`, `dativos`, `cotas`, `REINF` e `BI`
+- separacao entre `routes`, `services`, `models`, `templates` e `tests`
+- evolucao de schema via Alembic
+- regras financeiras e fiscais com `Decimal`
+- auditoria de alteracoes sensiveis
+- healthcheck operacional e observabilidade local
+- scripts Windows para execucao, backup e publicacao segura
+- suite automatizada com `268` testes passando na sincronizacao desta copia
 
 ## Principais modulos
 
-- `RPVs normais`: cadastro, lista, filtros, pendencias e cruzamentos.
-- `RPVs dativos`: C.I., lotes, itens, conciliacao e revisao operacional.
-- `Cotas`: saldo mensal por ficha, consumo, transferencia e historico.
-- `REINF`: recortes mensal/anual, conferencia fiscal e exportacao.
-- `BI`: leitura executiva, series operacionais, beneficiarios e filtros.
-- `Usuarios e seguranca`: login, troca de senha, recuperacao e perfis.
+- `RPVs normais`: cadastro, lista, filtros, pendencias e cruzamentos
+- `RPVs dativos`: `C.I.`, lotes, itens, conciliacao e revisao operacional
+- `Cotas`: saldo mensal por ficha, consumo, transferencia e historico
+- `REINF`: recortes mensal/anual, conferencia fiscal e exportacao
+- `BI`: leitura executiva, series operacionais, beneficiarios e filtros
+- `Usuarios e seguranca`: login, troca de senha, recuperacao e perfis
 
 ## Estado arquitetural atual
 
 O projeto evoluiu para um patamar mais profissional sem reescrita grande. As melhorias mais relevantes desta fase publica foram:
 
-- modularizacao do `BI` em servicos dedicados;
-- modularizacao de `dativos`, `REINF` e lista principal de `RPVs`;
-- separacao progressiva da suite por dominio;
-- endurecimento da camada operacional para crescimento futuro;
-- reforco da governanca entre `dev`, `runtime` e espelho publico.
+- modularizacao do `BI` em servicos dedicados
+- modularizacao de `dativos`, `REINF` e lista principal de `RPVs`
+- entrada do modulo de `cotas` no fluxo arquitetural consolidado
+- separacao progressiva da suite por dominio
+- endurecimento da camada operacional para crescimento futuro
+- reforco da governanca entre `dev`, `runtime` e espelho publico
+
+## Screenshots
+
+As capturas demonstrativas devem ficar em [`docs/screenshots/`](docs/screenshots/README.md).
+
+Orientacao desta camada publica:
+
+- usar apenas dados anonimizados ou ficticios
+- ocultar nomes pessoais, documentos e identificadores internos
+- preservar o layout real da interface
+- evitar blur pesado, tarjas pretas ou edicao com cara artificial
+
+Capturas recomendadas:
+
+1. `dashboard-home-clean.png`
+2. `bi-operacional-clean.png`
+3. `cotas-clean.png`
 
 ## Qualidade e validacao
 
@@ -96,18 +123,19 @@ python -m pytest -q tests
 - [Seguranca](docs/SECURITY.md)
 - [Setup local](docs/SETUP.md)
 - [Notas de portfolio](docs/PORTFOLIO.md)
+- [Guia de screenshots](docs/screenshots/README.md)
 
 ## Higiene de publicacao
 
 Este repositorio deve permanecer sem:
 
-- bancos SQLite reais;
-- pasta `instance/`;
-- backups;
-- planilhas e PDFs operacionais;
-- `.env` real;
-- certificados e chaves locais;
-- material juridico, negocial ou privado.
+- bancos SQLite reais
+- pasta `instance/`
+- backups
+- planilhas e PDFs operacionais
+- `.env` real
+- certificados e chaves locais
+- material juridico, negocial ou privado
 
 ## Autor
 

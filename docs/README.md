@@ -9,6 +9,7 @@ Este indice organiza a camada publica do espelho de portfolio.
 - [Seguranca](SECURITY.md)
 - [Setup local](SETUP.md)
 - [Notas de portfolio](PORTFOLIO.md)
+- [Guia de screenshots](screenshots/README.md)
 
 ## Objetivo desta pasta
 
