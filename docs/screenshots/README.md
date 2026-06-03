@@ -21,6 +21,7 @@ Antes de publicar, remova ou substitua:
 4. numeros de processo identificaveis
 5. valores reais sensiveis, quando necessario
 6. contagens internas que exponham volume operacional real
+7. barra do navegador, URL, hostname, query string ou caminho de rota
 
 ## Como sanitizar sem perder qualidade
 
@@ -29,7 +30,7 @@ Recomendacao:
 1. use overlays com a mesma linguagem visual da interface
 2. mantenha tipografia, espacamento e cor consistentes
 3. substitua o nome por algo como `Usuario demonstracao`
-4. substitua valores por numeros ficticios plausiveis
+4. prefira valores zerados quando a captura for apenas ilustrativa
 5. exporte em `PNG` em alta resolucao
 
 Evite:
@@ -57,4 +58,4 @@ Nomeie os arquivos assim:
 
 Quando as imagens forem adicionadas ao README, use uma observacao curta como:
 
-`Capturas demonstrativas com dados anonimizados ou ficticios.`
+`Capturas demonstrativas com dados ficticios ou anonimizados, sem URL, rota real exposta ou identificadores internos.`

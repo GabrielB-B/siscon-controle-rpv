@@ -52,7 +52,9 @@ As capturas demonstrativas devem ficar em [`docs/screenshots/`](docs/screenshots
 Orientacao desta camada publica:
 
 - usar apenas dados anonimizados ou ficticios
+- zerar valores, contagens e KPIs quando a captura nao precisar demonstrar volume
 - ocultar nomes pessoais, documentos e identificadores internos
+- nao exibir barra do navegador, URL, hostname, query string ou caminho de rota
 - preservar o layout real da interface
 - evitar blur pesado, tarjas pretas ou edicao com cara artificial
 
@@ -62,7 +64,12 @@ Capturas recomendadas:
 2. `bi-operacional-clean.png`
 3. `cotas-clean.png`
 
-Capturas demonstrativas com dados anonimizados ou ficticios:
+Capturas demonstrativas desta copia publica:
+
+- usam dados ficticios ou anonimizados
+- trazem valores e indicadores zerados intencionalmente
+- nao exibem URL, rota real, hostname, query string ou identificador operacional interno
+- seguem uma politica conservadora de seguranca da informacao e adequacao a LGPD
 
 ### Painel inicial
 
@@ -146,6 +153,13 @@ Este repositorio deve permanecer sem:
 - `.env` real
 - certificados e chaves locais
 - material juridico, negocial ou privado
+
+As imagens publicadas nesta camada tambem devem permanecer sem:
+
+- dados pessoais reais
+- dados operacionais reais
+- identificadores internos ou documentos reais
+- rotas internas ou evidencias de infraestrutura
 
 ## Autor
 
