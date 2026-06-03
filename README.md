@@ -62,6 +62,16 @@ Capturas recomendadas:
 2. `bi-operacional-clean.png`
 3. `cotas-clean.png`
 
+Capturas demonstrativas com dados anonimizados ou ficticios:
+
+### Painel inicial
+
+![Painel inicial do SISCON com dados demonstrativos anonimizados](docs/screenshots/dashboard-home-clean-sample.png)
+
+### BI operacional
+
+![BI operacional do SISCON com dados demonstrativos anonimizados](docs/screenshots/bi-operacional-clean-sample.png)
+
 ## Qualidade e validacao
 
 Na sincronizacao desta copia publica, a validacao considerada foi:
