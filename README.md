@@ -14,7 +14,7 @@ Esta pasta e o espelho publico do sistema, preparada para portfolio tecnico. O o
 - Auditoria de alteracoes sensiveis.
 - Healthcheck operacional e observabilidade local.
 - Scripts Windows para execucao, backup e publicacao segura.
-- Suite automatizada com `267` testes passando na sincronizacao desta copia.
+- Suite automatizada com `268` testes passando na sincronizacao desta copia.
 
 ## Principais modulos
 
@@ -40,7 +40,7 @@ O projeto evoluiu para um patamar mais profissional sem reescrita grande. As mel
 Na sincronizacao desta copia publica, a validacao considerada foi:
 
 ```text
-267 testes automatizados passando
+268 testes automatizados passando
 python -m compileall app tests -q sem erro
 varredura de seguranca sem banco real, instance, .env real, backups ou docs privados rastreados
 ```
