@@ -47,18 +47,10 @@ O projeto evoluiu para um patamar mais profissional sem reescrita grande. As mel
 
 ## Screenshots
 
-As capturas demonstrativas devem ficar em [`docs/screenshots/`](docs/screenshots/README.md).
+As capturas demonstrativas estão em [`docs/screenshots/`](docs/screenshots/README.md).
 
-Orientacao desta camada publica:
 
-- usar apenas dados anonimizados ou ficticios
-- zerar valores, contagens e KPIs quando a captura nao precisar demonstrar volume
-- ocultar nomes pessoais, documentos e identificadores internos
-- nao exibir barra do navegador, URL, hostname, query string ou caminho de rota
-- preservar o layout real da interface
-- evitar blur pesado, tarjas pretas ou edicao com cara artificial
-
-Capturas recomendadas:
+Capturas:
 
 1. `dashboard-home-clean.png`
 2. `bi-operacional-clean.png`
